@@ -26,8 +26,7 @@ const nav = [
   ["Factures pro forma", BadgeEuro],
   ["Demandes de chiffrage", ClipboardList],
   ["Fournisseurs", Truck],
-  ["Articles", Package], ["Catégories d’articles", Layers3],
-  ["Bibliothèque de groupes", Library],
+  ["Gestion des articles", Package],
   ["Utilisateurs", ShieldCheck],
 ];
 
@@ -114,13 +113,13 @@ const permissions = {
   "Responsable commercial":"Équipe commerciale, prospects, clients, devis et reporting",
   "Commercial":"Ses prospects, clients, rendez-vous, devis et documents",
 };
-const accessModules = ["Tableau de bord","Prospects","Agenda commercial","Clients","Devis","Factures","Factures pro forma","Demandes de chiffrage","Fournisseurs","Planning","Chantiers","Équipes d’installation","Maintenance","Photovoltaïque administratif","Visites techniques","Articles","Catégories d’articles","Bibliothèque de groupes","Utilisateurs"];
+const accessModules = ["Tableau de bord","Prospects","Agenda commercial","Clients","Devis","Factures","Factures pro forma","Demandes de chiffrage","Fournisseurs","Planning","Chantiers","Équipes d’installation","Maintenance","Photovoltaïque administratif","Visites techniques","Gestion des articles","Utilisateurs"];
 const roleDefaults = {
   "Admin VIP":accessModules,
-  "Admin second":["Tableau de bord","Prospects","Agenda commercial","Clients","Devis","Factures","Demandes de chiffrage","Fournisseurs","Planning","Chantiers","Équipes d’installation","Maintenance","Photovoltaïque administratif","Articles","Catégories d’articles","Utilisateurs"],
-  "Responsable technique":["Tableau de bord","Clients","Demandes de chiffrage","Fournisseurs","Planning","Chantiers","Équipes d’installation","Maintenance","Articles","Catégories d’articles"],
+  "Admin second":["Tableau de bord","Prospects","Agenda commercial","Clients","Devis","Factures","Demandes de chiffrage","Fournisseurs","Planning","Chantiers","Équipes d’installation","Maintenance","Photovoltaïque administratif","Gestion des articles","Utilisateurs"],
+  "Responsable technique":["Tableau de bord","Clients","Demandes de chiffrage","Fournisseurs","Planning","Chantiers","Équipes d’installation","Maintenance","Gestion des articles"],
   "Technicien":["Tableau de bord","Planning","Chantiers","Maintenance"],
-  "Responsable commercial":["Tableau de bord","Prospects","Agenda commercial","Clients","Devis","Planning","Articles"],
+  "Responsable commercial":["Tableau de bord","Prospects","Agenda commercial","Clients","Devis","Planning","Gestion des articles"],
   "Commercial":["Tableau de bord","Prospects","Agenda commercial","Clients","Devis","Planning"],
 };
 const euro = v => new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(v);
@@ -208,7 +207,8 @@ export default function Home() {
         const manager=(user.manager==="Marie Laurent"?"Khaled":user.manager)||(role==="Commercial"?"Khaled":role==="Technicien"?"Responsable technique":"Direction");
         let modules=user.modules||roleDefaults[role]||["Tableau de bord"];
         if(modules.includes("Devis & Factures")) modules=[...modules.filter(m=>m!=="Devis & Factures"),"Devis",...(["Admin VIP","Admin second"].includes(role)?["Factures"]:[])];
-        modules=modules.map(module=>module==="Groupes d’articles"?"Catégories d’articles":module);
+        const oldArticleModules=["Articles","Catégories d’articles","Groupes d’articles","Bibliothèque de groupes"];
+        if(modules.some(module=>oldArticleModules.includes(module))) modules=[...modules.filter(module=>!oldArticleModules.includes(module)),"Gestion des articles"];
         return {...user,role,manager,identifier:user.identifier||user.email,modules:[...new Set(modules)],authStatus:user.authStatus||"Actif"};
       });
       return JSON.stringify(migrated)===JSON.stringify(current)?current:migrated;
@@ -497,9 +497,7 @@ export default function Home() {
        active==="Factures pro forma" ? <BillingView kind="Pro forma" documents={billing.filter(d=>d.kind==="Pro forma")} clients={clients} query={query} onAdd={()=>{setEditingBilling(null);setNewBillingKind("Pro forma");setModal("billing");}} onEdit={doc=>{setEditingBilling(doc);setModal("billing");}} toast={showToast}/> :
        active==="Demandes de chiffrage" ? <CostRequestsView requests={costRequests} setRequests={setCostRequests} suppliers={suppliers} query={query} toast={showToast}/> :
        active==="Fournisseurs" ? <SuppliersView suppliers={suppliers} query={query} onAdd={()=>setModal("supplier")}/> :
-       active==="Articles" ? <ArticlesView articles={articles} setArticles={setArticles} query={query} onAdd={()=>setModal("article")} onImport={f=>importCsv(f,"article")} toast={showToast}/> :
-       active==="Catégories d’articles" ? <GroupsView groups={groups} articles={articles} query={query} onAdd={()=>setModal("group")} onImport={f=>importCsv(f,"group")}/> :
-       active==="Bibliothèque de groupes" ? <BundlesView bundles={bundles} articles={articles} query={query} onAdd={()=>setModal("bundle")}/> :
+       active==="Gestion des articles" ? <ArticleManagementView articles={articles} setArticles={setArticles} groups={groups} bundles={bundles} query={query} onAddArticle={()=>setModal("article")} onImportArticle={f=>importCsv(f,"article")} onAddGroup={()=>setModal("bundle")} onAddCategory={()=>setModal("group")} onImportCategory={f=>importCsv(f,"group")} toast={showToast}/> :
        active==="Utilisateurs" ? <UsersView users={team} setUsers={setTeam} query={query} onAdd={()=>{setEditingUser(null);setModal("user");}} onEdit={user=>{setEditingUser(user);setModal("user");}} onInvite={resendInvitation} toast={showToast}/> :
        <Placeholder title={active}/>}
     </section>
@@ -518,7 +516,7 @@ function Dashboard({filtered,contracts,quotes,navigate,applicationsOnly=false,on
     {name:"Commercial",icon:FileText,color:"#ef8e24",sub:"Devis et chiffrage",apps:[["Devis",FileText,"Offres commerciales"],["Demandes de chiffrage",ClipboardList,"Consultations fournisseurs"],["Factures pro forma",BadgeEuro,"Documents préparatoires"]]},
     {name:"Administration",icon:ReceiptText,color:"#79a214",sub:"Facturation et démarches",apps:[["Factures",ReceiptText,"Factures clients"],["Factures pro forma",BadgeEuro,"Pro forma"],["Photovoltaïque administratif",Zap,"Dimensionnement, mairie et raccordement"],["Maintenance",Wrench,"Contrats d’entretien"]]},
     {name:"Opérations",icon:HardHat,color:"#d84b3d",sub:"Terrain, équipes et planning",apps:[["Chantiers",HardHat,"Suivi des travaux"],["Planning",CalendarCheck,"Agenda des équipes"],["Équipes d’installation",Users,"Créer et organiser les équipes"],["Visites techniques",Eye,"Prévisites et validations"],["Maintenance",Wrench,"Rapports d’intervention"]]},
-    {name:"Catalogue",icon:Package,color:"#8d623b",sub:"Articles, groupes et fournisseurs",apps:[["Articles",Package,"Catalogue et tarifs"],["Catégories d’articles",Layers3,"Familles et sous-familles"],["Bibliothèque de groupes",Library,"Packs multi-articles"],["Fournisseurs",Truck,"Annuaire fournisseurs"]]},
+    {name:"Catalogue",icon:Package,color:"#8d623b",sub:"Articles, groupes et fournisseurs",apps:[["Gestion des articles",Package,"Articles, tarifs et groupes"],["Fournisseurs",Truck,"Annuaire fournisseurs"]]},
     {name:"Pilotage",icon:TrendingUp,color:"#8f9395",sub:"Activité et indicateurs",apps:[["Vue d’ensemble",LayoutDashboard,"Tableau de bord"],["Prospects",TrendingUp,"Analyse du pipeline"],["Chantiers",HardHat,"Activité opérationnelle"]]},
     {name:"Configuration",icon:ShieldCheck,color:"#4b5d84",sub:"Équipe et droits d’accès",apps:[["Utilisateurs",ShieldCheck,"Comptes et autorisations"]]},
   ];
@@ -663,6 +661,22 @@ function BillingView({kind,documents,clients,query,onAdd,onEdit,onValidate,onUnv
 }
 function ImportButton({onImport}) {
   return <label className="secondary import-button"><Upload size={17}/>Importer CSV<input type="file" accept=".csv,text/csv" onChange={e=>{onImport(e.target.files?.[0]);e.target.value="";}}/></label>;
+}
+function ArticleManagementView({articles,setArticles,groups,bundles,query,onAddArticle,onImportArticle,onAddGroup,onAddCategory,onImportCategory,toast}) {
+  const [tab,setTab]=useState("articles");
+  const tabs=[
+    ["articles","Articles",Package,articles.length],
+    ["bundles","Groupes d’articles",Library,bundles.length],
+    ["categories","Catégories",Layers3,groups.length],
+  ];
+  return <div className="article-management">
+    <div className="article-management-tabs" role="tablist" aria-label="Gestion des articles">
+      {tabs.map(([id,label,Icon,count])=><button type="button" role="tab" aria-selected={tab===id} className={tab===id?"active":""} key={id} onClick={()=>setTab(id)}><Icon size={17}/><span>{label}</span><b>{count}</b></button>)}
+    </div>
+    {tab==="articles"&&<ArticlesView articles={articles} setArticles={setArticles} query={query} onAdd={onAddArticle} onImport={onImportArticle} toast={toast}/>}
+    {tab==="bundles"&&<BundlesView bundles={bundles} articles={articles} query={query} onAdd={onAddGroup}/>}
+    {tab==="categories"&&<GroupsView groups={groups} articles={articles} query={query} onAdd={onAddCategory} onImport={onImportCategory}/>}
+  </div>;
 }
 function ArticlesView({articles,setArticles,query,onAdd,onImport,toast}) {
   const list=articles.filter(a=>Object.values(a).join(" ").toLowerCase().includes(query.toLowerCase()));
@@ -993,8 +1007,9 @@ function ArticleFields({groups}) {
 function BundleFields({articles}) {
   const [selected,setSelected]=useState([]);
   const toggle=article=>setSelected(selected.some(item=>item.id===article.id)?selected.filter(item=>item.id!==article.id):[...selected,{...article,price:article.sell}]);
-  const update=(id,price)=>setSelected(selected.map(item=>item.id===id?{...item,price:Number(price)}:item));
-  return <div className="bundle-fields"><label>Nom du groupe<input name="name" required placeholder="Ex. Pack climatisation complète"/></label><label>Famille<select name="family"><option>Climatisation</option><option>Pompe à chaleur</option><option>Ballon d’eau chaude</option><option>Panneaux photovoltaïques</option><option>Adoucisseur d’eau</option><option>Autre</option></select></label><div className="bundle-picker"><b>Articles distincts et tarifs</b>{articles.filter(article=>article.status!=="Inactif").map(article=><div key={article.id}><label><input type="checkbox" checked={selected.some(item=>item.id===article.id)} onChange={()=>toggle(article)}/><span>{article.code} — {article.name}<small>{article.category}</small></span></label>{selected.some(item=>item.id===article.id)&&<input type="number" min="0" step="0.01" value={selected.find(item=>item.id===article.id)?.price||0} onChange={e=>update(article.id,e.target.value)}/>}</div>)}</div><input type="hidden" name="items" value={JSON.stringify(selected.map(({code,name,category,price})=>({code,name,category,price})))}/></div>;
+  const update=(id,field,value)=>setSelected(selected.map(item=>item.id===id?{...item,[field]:field==="price"?Number(value):value}:item));
+  const total=selected.reduce((sum,item)=>sum+Number(item.price||0),0);
+  return <div className="bundle-fields"><label>Nom du groupe<input name="name" required placeholder="Ex. Pack pompe à chaleur complet"/></label><label>Famille<select name="family"><option>Climatisation</option><option>Pompe à chaleur</option><option>Ballon d’eau chaude</option><option>Panneaux photovoltaïques</option><option>Adoucisseur d’eau</option><option>Autre</option></select></label><div className="bundle-picker"><div className="bundle-picker-title"><b>Composition du groupe</b><span>Sélectionnez les articles puis adaptez leur libellé et leur tarif.</span></div>{articles.filter(article=>article.status!=="Inactif").map(article=>{const item=selected.find(selectedItem=>selectedItem.id===article.id);return <div className={item?"selected":""} key={article.id}><label><input type="checkbox" checked={Boolean(item)} onChange={()=>toggle(article)}/><span>{article.code} — {article.name}<small>{article.category}</small></span></label>{item&&<div className="bundle-line-fields"><label>Libellé dans le groupe<input type="text" value={item.name} onChange={e=>update(article.id,"name",e.target.value)} required/></label><label>Tarif HT (€)<input type="number" min="0" step="0.01" value={item.price} onChange={e=>update(article.id,"price",e.target.value)} required/></label></div>}</div>})}{selected.length>0&&<div className="bundle-total"><span>{selected.length} article(s) dans ce groupe</span><b>Total HT : {euro(total)}</b></div>}</div><input type="hidden" name="items" value={JSON.stringify(selected.map(({code,name,category,price})=>({code,name,category,price})))}/></div>;
 }
 function CategoryFields({groups}) {
   const categories=groups.filter(group=>!group.parent);
