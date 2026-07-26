@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/prepare-sites-dist.mjs",
     "build:next": "next build",
-    "build:legacy-sites": "next build && node scripts/prepare-sites-dist.mjs",
+    "build:vercel": "next build",
     "build:sites": "opennextjs-cloudflare build",
     "start": "next start",
     "lint": "next lint"
