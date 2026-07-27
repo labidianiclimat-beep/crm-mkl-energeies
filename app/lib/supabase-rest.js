@@ -73,16 +73,37 @@ function tokenExpiry(accessToken) {
 }
 
 export async function updatePassword(accessToken,refreshToken,password) {
-  if(!accessToken) throw new Error("RECOVERY_TOKEN_MISSING");
+  if(!accessToken&&!refreshToken) throw new Error("RECOVERY_TOKEN_MISSING");
+
+  // A recovery link can reach the application with an access token that has
+  // already been rotated by Supabase. Exchange its refresh token first so the
+  // password update always uses the current authenticated session.
+  let session={
+    access_token:accessToken||"",
+    refresh_token:refreshToken||""
+  };
+  if(refreshToken) {
+    try {
+      session=await request("/auth/v1/token?grant_type=refresh_token",{
+        method:"POST",
+        body:{refresh_token:refreshToken}
+      });
+    } catch(error) {
+      if(!accessToken) throw error;
+    }
+  }
+  if(!session.access_token) throw new Error("RECOVERY_TOKEN_MISSING");
+
   const user=await request("/auth/v1/user",{
     method:"PUT",
-    token:accessToken,
+    token:session.access_token,
     body:{password}
   });
   saveSession({
-    access_token:accessToken,
-    refresh_token:refreshToken||"",
-    expires_at:tokenExpiry(accessToken),
+    ...session,
+    access_token:session.access_token,
+    refresh_token:session.refresh_token||refreshToken||"",
+    expires_at:session.expires_at||tokenExpiry(session.access_token),
     user
   });
   profilePromise=null;
