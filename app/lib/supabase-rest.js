@@ -75,22 +75,18 @@ function tokenExpiry(accessToken) {
 export async function updatePassword(accessToken,refreshToken,password) {
   if(!accessToken&&!refreshToken) throw new Error("RECOVERY_TOKEN_MISSING");
 
-  // A recovery link can reach the application with an access token that has
-  // already been rotated by Supabase. Exchange its refresh token first so the
-  // password update always uses the current authenticated session.
+  // The recovery link already contains an authenticated recovery access token.
+  // Use it directly: refresh tokens are single-use and rotating one here can
+  // invalidate the recovery session before the password update is submitted.
   let session={
     access_token:accessToken||"",
     refresh_token:refreshToken||""
   };
-  if(refreshToken) {
-    try {
-      session=await request("/auth/v1/token?grant_type=refresh_token",{
-        method:"POST",
-        body:{refresh_token:refreshToken}
-      });
-    } catch(error) {
-      if(!accessToken) throw error;
-    }
+  if(!session.access_token&&refreshToken) {
+    session=await request("/auth/v1/token?grant_type=refresh_token",{
+      method:"POST",
+      body:{refresh_token:refreshToken}
+    });
   }
   if(!session.access_token) throw new Error("RECOVERY_TOKEN_MISSING");
 
