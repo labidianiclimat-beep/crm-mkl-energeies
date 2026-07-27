@@ -63,13 +63,30 @@ export async function signIn(email,password) {
   return session;
 }
 
-export async function updatePassword(accessToken,password) {
+function tokenExpiry(accessToken) {
+  try {
+    const payload=JSON.parse(atob(accessToken.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")));
+    return Number(payload.exp||0);
+  } catch {
+    return Math.floor(Date.now()/1000)+3600;
+  }
+}
+
+export async function updatePassword(accessToken,refreshToken,password) {
   if(!accessToken) throw new Error("RECOVERY_TOKEN_MISSING");
-  return request("/auth/v1/user",{
+  const user=await request("/auth/v1/user",{
     method:"PUT",
     token:accessToken,
     body:{password}
   });
+  saveSession({
+    access_token:accessToken,
+    refresh_token:refreshToken||"",
+    expires_at:tokenExpiry(accessToken),
+    user
+  });
+  profilePromise=null;
+  return user;
 }
 
 export async function inviteUser({email,name,role,modules=[]}) {

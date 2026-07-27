@@ -11,6 +11,7 @@ export default function CrmAccessGate({ children }) {
   const [password,setPassword]=useState("");
   const [confirmPassword,setConfirmPassword]=useState("");
   const [recoveryToken,setRecoveryToken]=useState("");
+  const [recoveryRefreshToken,setRecoveryRefreshToken]=useState("");
   const [showPassword,setShowPassword]=useState(false);
   const [error,setError]=useState("");
   const [submitting,setSubmitting]=useState(false);
@@ -19,6 +20,7 @@ export default function CrmAccessGate({ children }) {
     const recovery=new URLSearchParams(window.location.hash.slice(1));
     if(["recovery","invite","magiclink","signup"].includes(recovery.get("type"))&&recovery.get("access_token")) {
       setRecoveryToken(recovery.get("access_token"));
+      setRecoveryRefreshToken(recovery.get("refresh_token")||"");
     }
     hasCloudSession().then(setUnlocked).finally(()=>setReady(true));
     const logout=async()=>{
@@ -55,9 +57,10 @@ export default function CrmAccessGate({ children }) {
     if(password!==confirmPassword) return setError("Les deux mots de passe sont différents.");
     setSubmitting(true);
     try {
-      await updatePassword(recoveryToken,password);
-      await signIn(email.trim(),password);
+      await updatePassword(recoveryToken,recoveryRefreshToken,password);
       window.history.replaceState(null,"",window.location.pathname);
+      setRecoveryToken("");
+      setRecoveryRefreshToken("");
       setUnlocked(true);
       setError("");
     } catch {
