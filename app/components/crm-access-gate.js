@@ -18,11 +18,14 @@ export default function CrmAccessGate({ children }) {
 
   useEffect(()=>{
     const recovery=new URLSearchParams(window.location.hash.slice(1));
-    if(["recovery","invite","magiclink","signup"].includes(recovery.get("type"))&&recovery.get("access_token")) {
+    const hasRecoverySession=["recovery","invite","magiclink","signup"].includes(recovery.get("type"))&&Boolean(recovery.get("access_token"));
+    if(hasRecoverySession) {
       setRecoveryToken(recovery.get("access_token"));
       setRecoveryRefreshToken(recovery.get("refresh_token")||"");
+      setReady(true);
+    } else {
+      hasCloudSession().then(setUnlocked).finally(()=>setReady(true));
     }
-    hasCloudSession().then(setUnlocked).finally(()=>setReady(true));
     const logout=async()=>{
       await signOut();
       setUnlocked(false);
