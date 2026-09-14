@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStored } from "./lib/use-stored";
 import { canAccessNav, resolveAllowedModules } from "./lib/access-control";
-import { authFetch, getCurrentProfile } from "./lib/supabase-rest";
+import { authFetch, getCloudState, getCurrentProfile } from "./lib/supabase-rest";
+import {
+  LEGACY_STATE_KEYS,
+  buildLegacyReport,
+  legacyArticleToPayload,
+  legacyClientToPayload,
+  readLocalLegacyState,
+} from "./lib/legacy-state-recovery";
 import { canPerformAction, isAdminRole } from "./lib/permissions";
 import { CLIENT_STATUSES, CLIENT_TYPES, canAssignClientCommercial } from "./lib/clients";
 import { ARTICLE_CATEGORIES, ARTICLE_UNITS, canManageArticles, matchesArticleSearch } from "./lib/articles";
@@ -197,6 +204,9 @@ export default function Home() {
   const [purchaseOrders,setPurchaseOrders]=useStored("mkl-purchase-orders",[]);
   const [currentProfile,setCurrentProfile]=useState(null);
   const [profileLoaded,setProfileLoaded]=useState(false);
+  const [legacySnapshot,setLegacySnapshot]=useState(null);
+  const [legacyBusy,setLegacyBusy]=useState(false);
+  const [apiSnapshot,setApiSnapshot]=useState(null);
   const currentRole=currentProfile?.role||"";
   const userName=currentProfile?.full_name||currentProfile?.email||"Utilisateur";
   const allowedModules=useMemo(
@@ -237,9 +247,100 @@ export default function Home() {
         if(articlesRes.ok&&Array.isArray(articlesData.articles)) setArticles(articlesData.articles);
         if(devisRes.ok&&Array.isArray(devisData.documents)) setBilling(devisData.documents);
         if(brandsRes.ok&&Array.isArray(brandsData.brands)) setBrands(brandsData.brands);
+
+        if(clientsRes.ok&&articlesRes.ok&&devisRes.ok) setApiSnapshot({
+          clients:Array.isArray(clientsData.clients)?clientsData.clients:[],
+          articles:Array.isArray(articlesData.articles)?articlesData.articles:[],
+          billing:Array.isArray(devisData.documents)?devisData.documents:[],
+        });
       } catch {}
     })();
   },[profileLoaded,currentProfile?.id]);
+
+  // Instantané de l'ancien stockage pris au montage. useStored réécrit le blob
+  // avec les données des API 450 ms après leur chargement : lire plus tard
+  // reviendrait à comparer le blob à lui-même et à manquer ce qu'il faut
+  // récupérer. Le stockage navigateur est lu de façon synchrone, donc sûr.
+  useEffect(()=>{
+    const local={};
+    for(const [entity,key] of Object.entries(LEGACY_STATE_KEYS)) local[entity]=readLocalLegacyState(key);
+    let cancelled=false;
+    (async()=>{
+      const cloud={};
+      await Promise.all(Object.entries(LEGACY_STATE_KEYS).map(async([entity,key])=>{
+        const result=await getCloudState(key).catch(()=>null);
+        cloud[entity]=Array.isArray(result?.value)?result.value:null;
+      }));
+      if(!cancelled) setLegacySnapshot({local,cloud});
+    })();
+    return ()=>{cancelled=true;};
+  },[]);
+
+  // La comparaison porte sur la réponse des API, pas sur les listes affichées :
+  // celles-ci contiennent les valeurs de démonstration avant le chargement, et
+  // reçoivent des enregistrements injectés localement qui masqueraient ce qu'il
+  // reste à récupérer.
+  const legacyReport=useMemo(()=>{
+    if(!legacySnapshot||!apiSnapshot) return null;
+    const legacy={};
+    for(const entity of Object.keys(LEGACY_STATE_KEYS)) {
+      legacy[entity]=[legacySnapshot.local[entity],legacySnapshot.cloud[entity]];
+    }
+    return buildLegacyReport({legacy,current:apiSnapshot});
+  },[legacySnapshot,apiSnapshot]);
+
+  async function recoverLegacyState() {
+    if(!legacyReport||legacyBusy) return;
+    setLegacyBusy(true);
+    const created={clients:0,articles:0};
+    let refused=0;
+    try {
+      for(const record of legacyReport.clients) {
+        try {
+          const response=await authFetch("/api/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(legacyClientToPayload(record))});
+          if(response.ok) created.clients+=1; else refused+=1;
+        } catch { refused+=1; }
+      }
+      for(const record of legacyReport.articles) {
+        try {
+          const response=await authFetch("/api/articles",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(legacyArticleToPayload(record))});
+          if(response.ok) created.articles+=1; else refused+=1;
+        } catch { refused+=1; }
+      }
+
+      // Recharger depuis les API met à jour l'écran et fait disparaître de la
+      // bannière ce qui est désormais en base.
+      const [clientsRes,articlesRes]=await Promise.all([authFetch("/api/clients"),authFetch("/api/articles")]);
+      const clientsData=await clientsRes.json().catch(()=>({}));
+      const articlesData=await articlesRes.json().catch(()=>({}));
+      const freshClients=clientsRes.ok&&Array.isArray(clientsData.clients)?clientsData.clients:null;
+      const freshArticles=articlesRes.ok&&Array.isArray(articlesData.articles)?articlesData.articles:null;
+      if(freshClients) setClients(freshClients);
+      if(freshArticles) setArticles(freshArticles);
+      setApiSnapshot(current=>({
+        clients:freshClients||current?.clients||[],
+        articles:freshArticles||current?.articles||[],
+        billing:current?.billing||[],
+      }));
+
+      const parts=[created.clients&&`${created.clients} client(s)`,created.articles&&`${created.articles} article(s)`].filter(Boolean);
+      showToast(parts.length
+        ?`${parts.join(" et ")} enregistré(s) en base${refused?` — ${refused} refusé(s)`:""}`
+        :"Aucun enregistrement récupéré");
+    } finally {
+      setLegacyBusy(false);
+    }
+  }
+
+  function downloadLegacyArchive() {
+    const archive={exportedAt:new Date().toISOString(),source:"ancien stockage local et blob crm_state",report:legacyReport};
+    const anchor=document.createElement("a");
+    anchor.href=URL.createObjectURL(new Blob([JSON.stringify(archive,null,2)],{type:"application/json"}));
+    anchor.download="mkl-ancien-stockage.json";
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+    showToast("Archive téléchargée");
+  }
 
   useEffect(()=>{
     setTeam(current=>{
@@ -829,7 +930,7 @@ export default function Home() {
         <div className="header-navigation">{active!=="Applications"&&<button className="workspace-back" onClick={()=>{setActive("Applications");setQuery("");}}><ArrowLeft size={17}/><span>Applications</span></button>}<div className="search"><Search size={18}/><input placeholder={`Rechercher dans ${active.toLowerCase()}…`} value={query} onChange={e=>setQuery(e.target.value)}/><kbd>⌘ K</kbd></div></div>
         <div className="header-actions"><button className="icon-btn"><Bell size={19}/><i/></button><button className="logout-button" onClick={()=>logoutCrm()}><LogOut size={17}/>Déconnexion</button></div>
       </header>
-      {canViewActive&&active==="Applications" ? <Dashboard filtered={filtered} contracts={contracts} quotes={billing.filter(d=>d.kind==="Devis")} navigate={setActive} applicationsOnly allowedModules={allowedModules} canBackup={canBackup} userName={userName} onBackup={exportFullBackup}/> :
+      {canViewActive&&active==="Applications" ? <Dashboard filtered={filtered} contracts={contracts} quotes={billing.filter(d=>d.kind==="Devis")} navigate={setActive} applicationsOnly allowedModules={allowedModules} canBackup={canBackup} userName={userName} onBackup={exportFullBackup} legacyReport={legacyReport} legacyBusy={legacyBusy} onRecoverLegacy={recoverLegacyState} onDownloadLegacy={downloadLegacyArchive}/> :
        canViewActive&&active==="Vue d’ensemble" ? <CommercialOverview navigate={setActive} allowedModules={allowedModules} userName={userName} localProspects={opps} localAppointments={commercialAppointments} canFilter={canAssignCommercial||["Direction","Admin VIP","Admin second","Secrétariat","Responsable commercial"].includes(currentRole)}/> :
        canViewActive&&active==="Prospects" ? <ProspectsView prospects={opps} appointments={commercialAppointments} setAppointments={setCommercialAppointments} query={query} onAdd={()=>{setEditingProspect(null);setModal("prospect");}} onEdit={prospect=>{setEditingProspect(prospect);setModal("prospect");}} toast={showToast}/> :
        canViewActive&&active==="Agenda commercial" ? <CommercialAgendaView appointments={commercialAppointments} setAppointments={setCommercialAppointments} prospects={opps} team={team} query={query} onAdd={()=>setModal("prospect")} toast={showToast} canDelete={canDelete}/> :
@@ -996,7 +1097,25 @@ function CommercialOverview({navigate,allowedModules=null,userName="Utilisateur"
   </div>;
 }
 
-function Dashboard({filtered,contracts,quotes,navigate,applicationsOnly=false,onBackup,allowedModules=null,userName="Utilisateur",canBackup=false}) {
+function LegacyStateNotice({report,busy,onRecover,onDownload}) {
+  if(!report||!report.total) return null;
+  const counts=[
+    report.clients.length&&`${report.clients.length} client${report.clients.length>1?"s":""}`,
+    report.articles.length&&`${report.articles.length} article${report.articles.length>1?"s":""}`,
+    report.billing.length&&`${report.billing.length} devis`,
+  ].filter(Boolean);
+  return <div className="legacy-notice">
+    <div className="legacy-notice-head"><AlertTriangle size={18}/><b>Données présentes uniquement dans l’ancien stockage</b></div>
+    <p>{counts.join(", ")} {report.total>1?"existent":"existe"} dans le stockage du navigateur ou l’ancien blob partagé, sans être enregistré{report.total>1?"s":""} en base. Ces données ne sont visibles que sur ce poste et disparaîtraient en changeant de navigateur.</p>
+    {report.billing.length>0&&<p className="legacy-notice-warning">Les devis ne peuvent pas être recréés automatiquement : leur numéro est attribué par la base et leur historique de statuts ne serait pas reconstitué. Télécharge l’archive et ressaisis-les, ou demande-moi de les traiter au cas par cas.</p>}
+    <div className="legacy-notice-actions">
+      {report.recoverable>0&&<button className="primary" onClick={onRecover} disabled={busy}>{busy?<><RefreshCw size={16} className="spin"/>Récupération…</>:<><Upload size={16}/>Enregistrer en base ({report.recoverable})</>}</button>}
+      <button className="secondary" onClick={onDownload}><Download size={16}/>Télécharger l’archive</button>
+    </div>
+  </div>;
+}
+
+function Dashboard({filtered,contracts,quotes,navigate,applicationsOnly=false,onBackup,allowedModules=null,userName="Utilisateur",canBackup=false,legacyReport=null,legacyBusy=false,onRecoverLegacy,onDownloadLegacy}) {
   const [selectedFamily,setSelectedFamily]=useState(null);
   const activityTargets={Devis:"Devis",Client:"Clients",Maintenance:"Maintenance",Chiffrage:"Demandes de chiffrage",Planning:"Planning"};
   const families=[
@@ -1018,7 +1137,7 @@ function Dashboard({filtered,contracts,quotes,navigate,applicationsOnly=false,on
     </div>
     <aside className="recent-activity"><div><Clock3 size={16}/><h3>Dernières actions</h3></div>{recentActivity.map(([type,label,time,Icon])=><button key={label} onClick={()=>navigate(activityTargets[type]||type)}><i><Icon size={13}/></i><span><b>{label}</b><small>{time}</small></span></button>)}</aside>
   </section>;
-  if(applicationsOnly) return <div className="content applications-home"><div className="applications-home-head"><div><p>BIENVENUE DANS MKL ÉNERGIES</p><h1>Mes applications</h1><span>Choisissez votre espace de travail</span></div><div className="applications-home-actions">{canBackup&&<button className="backup-button" onClick={onBackup}><Download size={18}/><span><b>Sauvegarde complète</b><small>Clients, utilisateurs et essais</small></span></button>}{canAccessNav(allowedModules,"Vue d’ensemble")&&<button onClick={()=>navigate("Vue d’ensemble")}><LayoutDashboard size={18}/><span><b>Vue d’ensemble</b><small>Indicateurs commerciaux réels</small></span><ChevronRight size={16}/></button>}</div></div>{launcher}</div>;
+  if(applicationsOnly) return <div className="content applications-home"><div className="applications-home-head"><div><p>BIENVENUE DANS MKL ÉNERGIES</p><h1>Mes applications</h1><span>Choisissez votre espace de travail</span></div><div className="applications-home-actions">{canBackup&&<button className="backup-button" onClick={onBackup}><Download size={18}/><span><b>Sauvegarde complète</b><small>Clients, utilisateurs et essais</small></span></button>}{canAccessNav(allowedModules,"Vue d’ensemble")&&<button onClick={()=>navigate("Vue d’ensemble")}><LayoutDashboard size={18}/><span><b>Vue d’ensemble</b><small>Indicateurs commerciaux réels</small></span><ChevronRight size={16}/></button>}</div></div><LegacyStateNotice report={legacyReport} busy={legacyBusy} onRecover={onRecoverLegacy} onDownload={onDownloadLegacy}/>{launcher}</div>;
   return <CommercialOverview navigate={navigate} allowedModules={allowedModules} userName={userName}/>;
 }
 

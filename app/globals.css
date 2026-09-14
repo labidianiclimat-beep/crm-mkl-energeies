@@ -518,3 +518,14 @@
   .access-brand, .access-copy { padding-left: 26px; padding-right: 26px; }
   .access-card form { padding-left: 26px; padding-right: 26px; }
 }
+
+.legacy-notice{margin:0 0 20px;padding:16px 18px;border:1px solid #f0dcae;border-left:4px solid #e0a630;border-radius:12px;background:#fffaf0;color:#6b5320}
+.legacy-notice-head{display:flex;align-items:center;gap:8px;color:#8a6414;font-size:11px}
+.legacy-notice-head svg{flex-shrink:0}
+.legacy-notice p{margin:8px 0 0;font-size:11px;line-height:1.55}
+.legacy-notice-warning{color:#8a6414}
+.legacy-notice-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
+.legacy-notice-actions button{display:inline-flex;align-items:center;gap:7px;padding:9px 13px;border-radius:8px;font:700 9px "DM Sans";cursor:pointer}
+.legacy-notice-actions .primary{border:1px solid #d99f2b;background:#e0a630;color:#fff}
+.legacy-notice-actions .primary:disabled{opacity:.6;cursor:progress}
+.legacy-notice-actions .secondary{border:1px solid #e3d7b8;background:#fff;color:#8a6414}
