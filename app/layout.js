@@ -9,7 +9,9 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="fr">
-      <body><CrmAccessGate>{children}</CrmAccessGate></body>
+      <body>
+        <CrmAccessGate>{children}</CrmAccessGate>
+      </body>
     </html>
   );
 }

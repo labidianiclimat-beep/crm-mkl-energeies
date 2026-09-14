@@ -1,4 +1,5 @@
-import { sendMail } from "../../proforma/send/route";
+import { requireApiSession, canSendMail } from "../../../lib/api-auth";
+import { sendMail } from "../../../lib/send-mail";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,12 @@ function base64Utf8(value) {
 
 export async function POST(request) {
   try {
+    const auth = await requireApiSession(request, { module: "Demandes de chiffrage", action: "send_mail" });
+    if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+    if (!canSendMail(auth.profile)) {
+      return Response.json({ error: "Vous n’avez pas l’autorisation d’envoyer des emails." }, { status: 403 });
+    }
+
     const { request: costRequest, suppliers } = await request.json();
     if (!costRequest?.number || !Array.isArray(suppliers) || !suppliers.length) {
       return Response.json({ error: "Demande ou fournisseurs manquants." }, { status: 400 });

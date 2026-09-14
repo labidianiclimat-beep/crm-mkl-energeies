@@ -1,130 +1,208 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
-import { cloudConfigured, hasCloudSession, signIn, signOut, updatePassword } from "../lib/supabase-rest";
+import { usePathname } from "next/navigation";
+import { KeyRound, LoaderCircle, LockKeyhole, Mail } from "lucide-react";
+import {
+  getAccessToken,
+  readAuthRedirectSession,
+  clearAuthRedirectParams,
+  exchangeAuthCode,
+  signInWithPin,
+  signOut,
+  saveBootstrapSession,
+} from "../lib/supabase-rest";
+
+const LINK_AUTH_FLAG = "mkl-auth-via-email-link";
 
 export default function CrmAccessGate({ children }) {
-  const [ready,setReady]=useState(false);
-  const [unlocked,setUnlocked]=useState(false);
-  const [email,setEmail]=useState("");
-  const [password,setPassword]=useState("");
-  const [confirmPassword,setConfirmPassword]=useState("");
-  const [recoveryToken,setRecoveryToken]=useState("");
-  const [recoveryRefreshToken,setRecoveryRefreshToken]=useState("");
-  const [showPassword,setShowPassword]=useState(false);
-  const [error,setError]=useState("");
-  const [submitting,setSubmitting]=useState(false);
+  const pathname = usePathname();
+  const [ready, setReady] = useState(false);
+  const [session, setSession] = useState(null);
+  const [email, setEmail] = useState("");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  useEffect(()=>{
-    const recovery=new URLSearchParams(window.location.hash.slice(1));
-    const hasRecoverySession=["recovery","invite","magiclink","signup"].includes(recovery.get("type"))&&Boolean(recovery.get("access_token"));
-    if(hasRecoverySession) {
-      setRecoveryToken(recovery.get("access_token"));
-      setRecoveryRefreshToken(recovery.get("refresh_token")||"");
-      setReady(true);
-    } else {
-      hasCloudSession().then(setUnlocked).finally(()=>setReady(true));
+  async function loadSession() {
+    const token = await getAccessToken();
+    if (!token) {
+      setSession(null);
+      return null;
     }
-    const logout=async()=>{
-      await signOut();
-      setUnlocked(false);
-      setPassword("");
-    };
-    window.addEventListener("mkl-crm-logout",logout);
-    return ()=>window.removeEventListener("mkl-crm-logout",logout);
-  },[]);
-
-  const submit=async event=>{
-    event.preventDefault();
-    if(!cloudConfigured) return setError("La connexion en ligne n’est pas encore configurée.");
-    setSubmitting(true);
+    const response = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const text = await response.text();
+    let data = null;
     try {
-      await signIn(email.trim(),password);
-      setUnlocked(true);
-      setError("");
-    } catch(error) {
-      const message=String(error?.message||"");
-      setError(/fetch|serveur|network|connexion/i.test(message)
-        ?"Le service de connexion est momentanément inaccessible."
-        :"Adresse e-mail ou mot de passe incorrect.");
-      setPassword("");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const submitRecovery=async event=>{
-    event.preventDefault();
-    if(password.length<10) return setError("Le mot de passe doit contenir au moins 10 caractères.");
-    if(password!==confirmPassword) return setError("Les deux mots de passe sont différents.");
-    setSubmitting(true);
-    try {
-      await updatePassword(recoveryToken,recoveryRefreshToken,password);
-      window.history.replaceState(null,"",window.location.pathname);
-      setRecoveryToken("");
-      setRecoveryRefreshToken("");
-      setUnlocked(true);
-      setError("");
+      data = text ? JSON.parse(text) : null;
     } catch {
-      setError("Le lien a expiré ou le mot de passe n’a pas pu être modifié.");
-    } finally {
-      setSubmitting(false);
+      setSession(null);
+      return null;
     }
-  };
+    if (!response.ok || !data?.authenticated) {
+      setSession(null);
+      return null;
+    }
+    setSession(data);
+    return data;
+  }
 
-  if(!ready) return <div className="access-loading" aria-label="Chargement"/>;
-  if(unlocked&&!recoveryToken) return children;
+  async function fetchMe() {
+    const token = await getAccessToken();
+    if (!token) throw new Error("Session requise.");
+    const response = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      throw new Error("Réponse serveur invalide. Réessayez dans un instant.");
+    }
+    if (!response.ok || !data?.authenticated) {
+      throw new Error(data?.error || "Session invalide.");
+    }
+    return data;
+  }
 
-  return <main className="access-page">
-    <section className="access-card">
-      <div className="access-brand">
-        <img src="/mkl-energies.png" alt="MKL Énergies"/>
-        <p>ESPACE CRM SÉCURISÉ</p>
-      </div>
-      <div className="access-copy">
-        <span className="access-icon"><LockKeyhole size={22}/></span>
-        <h1>{recoveryToken?"Nouveau mot de passe":"Bienvenue"}</h1>
-        <p>{recoveryToken?"Choisissez un mot de passe d’au moins 10 caractères.":"Connectez-vous avec votre compte MKL Énergies."}</p>
-      </div>
-      <form onSubmit={recoveryToken?submitRecovery:submit}>
-        {!recoveryToken&&<>
-          <label htmlFor="crm-email">Adresse e-mail</label>
-          <div className="access-password">
-            <Mail size={18}/>
-            <input id="crm-email" type="email" value={email}
-              onChange={event=>{setEmail(event.target.value);setError("");}}
-              placeholder="nom@mkl-energies.fr" autoComplete="username" required/>
-          </div>
-        </>}
-        <label htmlFor="crm-password">{recoveryToken?"Nouveau mot de passe":"Mot de passe"}</label>
-        <div className={`access-password ${error?"has-error":""}`}>
-          <LockKeyhole size={18}/>
-          <input id="crm-password" type={showPassword?"text":"password"} value={password}
-            onChange={event=>{setPassword(event.target.value);setError("");}}
-            placeholder={recoveryToken?"10 caractères minimum":"Votre mot de passe"}
-            autoComplete={recoveryToken?"new-password":"current-password"} required autoFocus/>
-          <button type="button" onClick={()=>setShowPassword(value=>!value)}
-            aria-label={showPassword?"Masquer le mot de passe":"Afficher le mot de passe"}>
-            {showPassword?<EyeOff size={18}/>:<Eye size={18}/>}
-          </button>
+  useEffect(() => {
+    (async () => {
+      if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("activated") === "1") {
+        setInfo("Compte activé. Connectez-vous avec votre email et votre PIN personnel.");
+        window.history.replaceState({}, "", "/");
+      }
+      const redirect = readAuthRedirectSession();
+      let arrivedViaEmailLink = false;
+      if (redirect?.code) {
+        try {
+          const authSession = await exchangeAuthCode(redirect.code);
+          saveBootstrapSession({
+            accessToken: authSession.access_token,
+            refreshToken: authSession.refresh_token,
+          });
+          sessionStorage.setItem(LINK_AUTH_FLAG, "1");
+          arrivedViaEmailLink = true;
+          clearAuthRedirectParams();
+          if (redirect.type === "recovery") {
+            window.location.href = "/reset-password";
+            return;
+          }
+          if (redirect.type === "invite" || redirect.type === "signup" || redirect.type === "magiclink") {
+            // Identity only — activation / PIN still required
+          }
+        } catch {
+          clearAuthRedirectParams();
+        }
+      } else if (redirect?.accessToken) {
+        saveBootstrapSession(redirect);
+        sessionStorage.setItem(LINK_AUTH_FLAG, "1");
+        arrivedViaEmailLink = true;
+        clearAuthRedirectParams();
+        if (redirect.type === "recovery") {
+          window.location.href = "/reset-password";
+          return;
+        }
+      }
+
+      const data = await loadSession();
+      const viaLink = arrivedViaEmailLink || sessionStorage.getItem(LINK_AUTH_FLAG) === "1";
+
+      if (data?.authenticated && data.activationRequired) {
+        window.location.href = "/activation";
+        return;
+      }
+
+      // Lien email seul : jamais d’accès CRM sans saisie du PIN
+      if (data?.authenticated && viaLink && !data.activationRequired) {
+        sessionStorage.removeItem(LINK_AUTH_FLAG);
+        await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+        await signOut();
+        setSession(null);
+        setInfo("Email confirmé. Connectez-vous avec votre adresse et votre code PIN personnel.");
+      }
+
+      setReady(true);
+    })();
+  }, []);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    setInfo("");
+    setLoading(true);
+    try {
+      sessionStorage.removeItem(LINK_AUTH_FLAG);
+      await signInWithPin(email, pin);
+      const me = await fetchMe();
+      if (me.activationRequired) {
+        window.location.href = "/activation";
+        return;
+      }
+      setSession(me);
+    } catch (caught) {
+      setError(String(caught?.message || "Identifiants incorrects."));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!ready) return <div className="access-loading" aria-busy="true" />;
+
+  if (pathname?.startsWith("/activation") || pathname?.startsWith("/reset-password")) return children;
+
+  // CRM uniquement si session PIN complète (pas d’activation en attente)
+  if (session?.authenticated && !session.activationRequired) return children;
+
+  return (
+    <main className="access-page">
+      <section className="access-card">
+        <header className="access-brand">
+          <img src="/mkl-energies.png" alt="MKL Énergies" />
+          <p>ESPACE CRM</p>
+        </header>
+        <div className="access-copy">
+          <span className="access-icon"><LockKeyhole size={22} /></span>
+          <h1>Connexion</h1>
+          <p>Utilisez votre email et votre <b>code PIN personnel</b>. Un lien reçu par email ne suffit jamais à ouvrir le CRM.</p>
         </div>
-        {recoveryToken&&<>
-          <label htmlFor="crm-password-confirm">Confirmer le mot de passe</label>
-          <div className={`access-password ${error?"has-error":""}`}>
-            <LockKeyhole size={18}/>
-            <input id="crm-password-confirm" type={showPassword?"text":"password"}
-              value={confirmPassword}
-              onChange={event=>{setConfirmPassword(event.target.value);setError("");}}
-              placeholder="Confirmez le mot de passe" autoComplete="new-password" required/>
+        <form onSubmit={submit}>
+          <label htmlFor="crm-email">Adresse email (identifiant)</label>
+          <div className="access-password">
+            <Mail size={18} />
+            <input id="crm-email" type="email" autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} required />
           </div>
-        </>}
-        {error&&<p className="access-error" role="alert">{error}</p>}
-        <button className="access-submit" type="submit" disabled={submitting}>
-          {submitting?"Validation…":recoveryToken?"Modifier le mot de passe":"Accéder au CRM"}
-        </button>
-      </form>
-      <footer>MKL Énergies · Votre énergie, notre expertise</footer>
-    </section>
-  </main>;
+          <label htmlFor="crm-pin">Code PIN personnel</label>
+          <div className={`access-password pin-input ${error ? "has-error" : ""}`}>
+            <KeyRound size={18} />
+            <input
+              id="crm-pin"
+              inputMode="numeric"
+              maxLength={6}
+              autoComplete="one-time-code"
+              value={pin}
+              onChange={event => setPin(event.target.value.replace(/\D/g, ""))}
+              required
+            />
+          </div>
+          {info && <p className="access-info">{info}</p>}
+          {error && <p className="access-error">{error}</p>}
+          <button className="access-submit" type="submit" disabled={loading}>
+            {loading ? <LoaderCircle size={18} className="spin" /> : "Se connecter"}
+          </button>
+        </form>
+        <footer>Réservé à l’équipe MKL Énergies</footer>
+      </section>
+    </main>
+  );
+}
+
+export async function logoutCrm() {
+  sessionStorage.removeItem(LINK_AUTH_FLAG);
+  await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  await signOut();
+  window.location.reload();
 }

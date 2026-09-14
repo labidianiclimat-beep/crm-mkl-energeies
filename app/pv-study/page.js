@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BatteryCharging, Building2, CheckCircle2, Euro, FileText, Leaf, Printer, Sun, Zap } from "lucide-react";
+import { BatteryCharging, Building2, CheckCircle2, Download, Euro, Leaf, Printer, Sun, Zap } from "lucide-react";
+import { getCloudState } from "../lib/supabase-rest";
 import "./study.css";
 
 const months=["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"];
@@ -13,17 +14,70 @@ function Page({number:pageNumber,title,children,className=""}) {
   return <section className={`study-page ${className}`}><header><img src="/mkl-energies.png" alt="MKL Énergies"/>{title&&<span>{title}</span>}</header>{children}<footer><span>MKL Énergies · Étude photovoltaïque personnalisée</span><b>{pageNumber}</b></footer></section>;
 }
 
+function readLocal(key) {
+  try { return JSON.parse(window.localStorage.getItem(key)||"null"); }
+  catch { return null; }
+}
+
+async function loadProjects() {
+  const local=readLocal("mkl-pv-projects");
+  if(Array.isArray(local)&&local.length) return local;
+  try {
+    const cloud=await getCloudState("mkl-pv-projects");
+    if(cloud?.connected&&Array.isArray(cloud.value)) {
+      window.localStorage.setItem("mkl-pv-projects",JSON.stringify(cloud.value));
+      return cloud.value;
+    }
+  } catch {}
+  return Array.isArray(local)?local:[];
+}
+
+async function loadClients() {
+  const local=readLocal("mkl-clients");
+  if(Array.isArray(local)&&local.length) return local;
+  try {
+    const cloud=await getCloudState("mkl-clients");
+    if(cloud?.connected&&Array.isArray(cloud.value)) {
+      window.localStorage.setItem("mkl-clients",JSON.stringify(cloud.value));
+      return cloud.value;
+    }
+  } catch {}
+  return Array.isArray(local)?local:[];
+}
+
 export default function PvStudyPage() {
   const [project,setProject]=useState(null);
   const [client,setClient]=useState(null);
+  const [loadError,setLoadError]=useState("");
+  const [loading,setLoading]=useState(true);
+
   useEffect(()=>{
-    const id=new URLSearchParams(window.location.search).get("id");
-    const projects=JSON.parse(localStorage.getItem("mkl-pv-projects")||"[]");
-    const clients=JSON.parse(localStorage.getItem("mkl-clients")||"[]");
-    const found=projects.find(item=>String(item.id)===String(id));
-    setProject(found||null);
-    setClient(clients.find(item=>item.name===found?.client)||null);
+    let cancelled=false;
+    (async()=>{
+      const id=new URLSearchParams(window.location.search).get("id");
+      if(!id) {
+        if(!cancelled){setLoadError("Aucune étude sélectionnée.");setLoading(false);}
+        return;
+      }
+      const [projects,clients]=await Promise.all([loadProjects(),loadClients()]);
+      if(cancelled) return;
+      const found=projects.find(item=>String(item.id)===String(id))||null;
+      if(!found) {
+        setLoadError("Étude introuvable sur cet appareil. Rouvrez-la depuis le CRM (Photovoltaïque administratif).");
+        setLoading(false);
+        return;
+      }
+      const matched=clients.find(item=>
+        (found.clientId&&String(item.id)===String(found.clientId))||
+        item.name===found.client
+      )||null;
+      setProject(found);
+      setClient(matched);
+      setLoading(false);
+    })();
+    return ()=>{cancelled=true;};
   },[]);
+
   const results=useMemo(()=>{
     if(!project) return null;
     const production=Number(project.estimatedProduction||0);
@@ -31,21 +85,50 @@ export default function PvStudyPage() {
     const selfRate=Number(project.selfConsumptionRate||65)/100;
     const selfConsumed=Math.min(consumption,production*selfRate);
     const surplus=Math.max(0,production-selfConsumed);
-    const gridBefore=consumption;
     const gridAfter=Math.max(0,consumption-selfConsumed);
     const yearlySaving=selfConsumed*Number(project.electricityPrice||.194)+surplus*Number(project.surplusPrice||.04);
     const savings25=Array.from({length:25},(_,index)=>yearlySaving*Math.pow(1.04,index)).reduce((sum,value)=>sum+value,0);
     const payback=yearlySaving?Number(project.price||0)/yearlySaving:0;
-    return {production,consumption,selfConsumed,surplus,gridBefore,gridAfter,yearlySaving,savings25,payback,autonomy:consumption?selfConsumed/consumption*100:0,co2:production*.055,trees:Math.round(production*.055/25),monthly:factors.map(value=>Math.round(production*value))};
+    return {production,consumption,selfConsumed,surplus,gridAfter,yearlySaving,savings25,payback,autonomy:consumption?selfConsumed/consumption*100:0,co2:production*.055,trees:Math.round(production*.055/25),monthly:factors.map(value=>Math.round(production*value))};
   },[project]);
-  if(!project||!results) return <main className="study-loading">Chargement de l’étude photovoltaïque…</main>;
+
+  function printStudy() {
+    window.print();
+  }
+
+  async function downloadHtml() {
+    const html=document.documentElement.outerHTML;
+    const blob=new Blob([`<!doctype html>${html}`],{type:"text/html;charset=utf-8"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`etude-pv-${project?.id||"mkl"}.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  if(loading) return <main className="study-loading">Chargement de l’étude photovoltaïque…</main>;
+  if(loadError||!project||!results) {
+    return <main className="study-loading study-error">
+      <b>Étude indisponible</b>
+      <p>{loadError||"Impossible d’afficher l’étude."}</p>
+      <a href="/">Retour au CRM</a>
+    </main>;
+  }
+
   const hasBattery=Number(project.batteryCapacity||0)>0;
-  const address=[client?.address,client?.postalCode,client?.city].filter(Boolean).join(" ");
+  const address=project.address
+    ||[client?.address,client?.postalCode||client?.codePostal,client?.city].filter(Boolean).join(" ")
+    ||[project.city,project.postcode].filter(Boolean).join(" ");
+
   return <main className="study-document">
-    <div className="study-toolbar"><button onClick={()=>window.print()}><Printer size={17}/>Enregistrer en PDF</button><span>Dans la fenêtre suivante, choisissez « Enregistrer au format PDF ».</span></div>
+    <div className="study-toolbar no-print">
+      <button type="button" onClick={printStudy}><Printer size={17}/>Imprimer / PDF</button>
+      <button type="button" className="secondary-tool" onClick={downloadHtml}><Download size={17}/>Télécharger HTML</button>
+      <span>Impression : cochez « Graphiques d’arrière-plan » puis « Enregistrer au format PDF ».</span>
+    </div>
     <Page number="1 / 8" className="cover">
-      <div className="cover-grid"><div><span className="cover-label">ÉTUDE PERSONNALISÉE</span><h1>Étude d’installation<br/>photovoltaïque</h1><p>Une simulation commerciale réalisée à partir des caractéristiques de votre projet et de votre consommation.</p><div className="cover-kpis"><b>{Number(project.powerKwp).toFixed(1)} <small>kWc installés</small></b><b>{number(results.production)} <small>kWh produits/an</small></b></div>{hasBattery&&<em><BatteryCharging size={17}/>Avec batterie {project.batteryCapacity} kWh</em>}</div><div className="roof-visual"><Sun size={90}/><div className="roof"><span>{Array.from({length:Math.min(18,project.panels)},(_,i)=><i key={i}/>)}</span></div></div></div>
-      <div className="identity-grid"><div><small>Préparée pour</small><b>{project.client}</b><span>{client?.phone||client?.mobile}</span><span>{client?.email}</span><span>{address}</span></div><div><small>Projet</small><b>{project.name}</b><span>{project.city}</span><span>Étude du {new Date(project.created).toLocaleDateString("fr-FR")}</span></div></div>
+      <div className="cover-grid"><div><span className="cover-label">ÉTUDE PERSONNALISÉE</span><h1>Étude d’installation<br/>photovoltaïque</h1><p>Une simulation commerciale réalisée à partir des caractéristiques de votre projet et de votre consommation.</p><div className="cover-kpis"><b>{Number(project.powerKwp).toFixed(1)} <small>kWc installés</small></b><b>{number(results.production)} <small>kWh produits/an</small></b></div>{hasBattery&&<em><BatteryCharging size={17}/>Avec batterie {project.batteryCapacity} kWh</em>}</div><div className="roof-visual"><Sun size={90}/><div className="roof"><span>{Array.from({length:Math.min(18,Number(project.panels)||0)},(_,i)=><i key={i}/>)}</span></div></div></div>
+      <div className="identity-grid"><div><small>Préparée pour</small><b>{project.client}</b><span>{client?.phone||client?.mobile||""}</span><span>{client?.email||""}</span><span>{address}</span>{project.lat&&project.lon&&<span>GPS {Number(project.lat).toFixed(5)}, {Number(project.lon).toFixed(5)}</span>}</div><div><small>Projet</small><b>{project.name}</b><span>{project.city}</span><span>Étude du {project.created?new Date(project.created).toLocaleDateString("fr-FR"):"—"}</span>{project.yieldSource&&<span>Productible : {project.yieldValue||project.yield} kWh/kWc ({project.yieldSource==="pvgis"?"PVGIS":"estimation"})</span>}</div></div>
       <p className="disclaimer">Estimations indicatives basées sur les informations renseignées. La production réelle dépend notamment de l’orientation, de l’inclinaison, des ombrages, de la météo et des caractéristiques définitives du site.</p>
     </Page>
     <Page number="2 / 8" title="Votre offre">
@@ -58,7 +141,7 @@ export default function PvStudyPage() {
     </Page>
     <Page number="4 / 8" title="Production solaire">
       <h2>Production mensuelle estimée</h2><div className="bar-chart">{results.monthly.map((value,index)=><div key={months[index]}><span style={{height:`${Math.max(8,value/Math.max(...results.monthly)*280)}px`}}><b>{number(value)}</b></span><small>{months[index]}</small></div>)}</div><div className="chart-total"><Sun/><span><small>Production annuelle moyenne</small><b>{number(results.production)} kWh</b></span></div>
-      <p className="study-note">La répartition mensuelle est une estimation. Une simulation définitive devra intégrer l’adresse exacte, l’orientation, l’inclinaison et les masques solaires.</p>
+      <p className="study-note">La répartition mensuelle est une estimation. Une simulation définitive devra intégrer l’orientation, l’inclinaison et les masques solaires.</p>
     </Page>
     <Page number="5 / 8" title="Impact sur votre consommation">
       <h2>Répartition de l’énergie produite</h2><div className="split-visual"><div className="donut" style={{"--part":`${Math.round(project.selfConsumptionRate||65)*3.6}deg`}}><span><b>{project.selfConsumptionRate||65}%</b>autoconsommés</span></div><div className="split-details"><p><i className="self"/><span><b>{number(results.selfConsumed)} kWh</b> autoconsommés</span></p><p><i className="sold"/><span><b>{number(results.surplus)} kWh</b> vendus au réseau</span></p><p><i className="grid"/><span><b>{number(results.gridAfter)} kWh</b> restant à acheter</span></p></div></div>
