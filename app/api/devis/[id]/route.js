@@ -2,13 +2,21 @@ import { requireApiSession } from "../../../lib/api-auth";
 import { ACTIVITY_ACTIONS, detectDevisSensitiveChanges } from "../../../lib/activity-logs";
 import {
   canManageDevis,
-  canViewAllDevis,
+  devisCommercialRequiredError,
   devisToUi,
   formToDevisRecord,
+  isDevisCommercialId,
+  isDevisOwnerRole,
   isLockedDevisStatus,
+  mustAssignDevisCommercial,
+  resolveDevisOwnerId,
   validateDevisPayload,
 } from "../../../lib/devis";
+import { notifyCommercialAndManager } from "../../../lib/client-followup-notify";
+import { isKnownFinanceStatus } from "../../../lib/client-followup";
 import { actorFromAuth, logActivity } from "../../../lib/log-activity";
+import { resolveDevisRecipient } from "../../../lib/convert-prospect";
+import { isProspectDispatcher } from "../../../lib/prospect-dispatch";
 import { isAdminRole } from "../../../lib/permissions";
 import { loadTeamMemberIds } from "../../../lib/team-scope";
 import { canAccessScopedRow } from "../../../lib/scoping";
@@ -58,6 +66,16 @@ async function canAccessRow(profile, userId, row) {
   return canAccessScopedRow(profile, userId, row, teamIds || []);
 }
 
+async function loadAssignableDevisOwner(orgId, commercialId) {
+  if (!isDevisCommercialId(commercialId)) return null;
+  const rows = await serviceRequest(
+    `/rest/v1/profiles?select=id,role,active&id=eq.${encodeURIComponent(commercialId)}&organization_id=eq.${encodeURIComponent(orgId)}&limit=1`
+  );
+  const row = rows?.[0];
+  if (!row?.active || !isDevisOwnerRole(row.role)) return null;
+  return row;
+}
+
 export async function GET(_request, { params }) {
   try {
     const auth = await requireApiSession(_request);
@@ -98,10 +116,88 @@ export async function PATCH(request, { params }) {
       return Response.json({ error: "Document introuvable." }, { status: 404 });
     }
 
-    const body = await request.json();
+    const bodyRaw = await request.json();
     const statusOnlyKeys = new Set(["status", "statut", "statusComment", "statusOnly", "kind"]);
-    const bodyKeys = Object.keys(body || {});
+    const financeOnlyKeys = new Set(["financeStatus", "statusOnly", "statusComment", "kind"]);
+    const bodyKeys = Object.keys(bodyRaw || {});
     const isStatusOnly = bodyKeys.length > 0 && bodyKeys.every(key => statusOnlyKeys.has(key));
+    const isFinanceOnly = bodyKeys.length > 0
+      && bodyKeys.every(key => financeOnlyKeys.has(key))
+      && bodyRaw.financeStatus != null;
+    if (isFinanceOnly) {
+      const nextFinance = String(bodyRaw.financeStatus || "").trim();
+      if (!isKnownFinanceStatus(nextFinance)) {
+        return Response.json({ error: "Statut de financement invalide." }, { status: 400 });
+      }
+      const extra = {
+        ...(existing.extra && typeof existing.extra === "object" ? existing.extra : {}),
+        financeStatus: nextFinance,
+      };
+      const updatedRows = await serviceRequest(`/rest/v1/devis?id=eq.${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: { extra, updated_at: new Date().toISOString() },
+      });
+      const updated = updatedRows?.[0] || { ...existing, extra };
+      const document = devisToUi(updated, await loadLines(id));
+      let commercialId = existing.commercial_id;
+      if (!commercialId && existing.client_id) {
+        const clients = await serviceRequest(
+          `/rest/v1/clients?select=commercial_id&id=eq.${encodeURIComponent(existing.client_id)}&limit=1`
+        ).catch(() => []);
+        commercialId = clients?.[0]?.commercial_id || "";
+      }
+      await notifyCommercialAndManager({
+        orgId: auth.profile.organization_id,
+        commercialId,
+        title: `Financement ${nextFinance.toLowerCase()} — ${existing.client_name || existing.numero_devis || "client"}`,
+        body: `${existing.numero_devis || "Devis"} · ${existing.financier || "Financement"} : ${nextFinance}`,
+        uniqueKey: `finance:${id}:${nextFinance}`,
+      });
+      return Response.json({ document });
+    }
+    const hasCommercialField =
+      Object.prototype.hasOwnProperty.call(bodyRaw || {}, "commercialId") ||
+      Object.prototype.hasOwnProperty.call(bodyRaw || {}, "commercial_id");
+    const requestedOwner = hasCommercialField ? bodyRaw.commercialId || bodyRaw.commercial_id || "" : undefined;
+    if (!isStatusOnly) {
+      const assignError = devisCommercialRequiredError(auth.profile, requestedOwner);
+      if (assignError) {
+        return Response.json({ error: assignError }, { status: 400 });
+      }
+    }
+    let ownerId = resolveDevisOwnerId(
+      auth.profile,
+      auth.user.id,
+      requestedOwner,
+      existing.commercial_id
+    );
+    if (!isStatusOnly && mustAssignDevisCommercial(auth.profile) && ownerId) {
+      const owner = await loadAssignableDevisOwner(existing.organization_id, ownerId);
+      if (!owner) ownerId = "";
+    }
+    let conversion = null;
+    let body = bodyRaw;
+    if (!isStatusOnly) {
+      try {
+        const teamIds = await loadTeamMemberIds(auth.profile, auth.user.id, {
+          forDispatch: isProspectDispatcher(auth.profile),
+        });
+        const resolved = await resolveDevisRecipient(bodyRaw, {
+          orgId: auth.profile.organization_id,
+          userId: auth.user.id,
+          profile: auth.profile,
+          teamIds: teamIds || [],
+        });
+        body = resolved.body;
+        conversion = resolved.conversion;
+      } catch (error) {
+        return Response.json(
+          { error: error.message || "Conversion du prospect impossible.", errors: error.errors },
+          { status: error.status || 400 }
+        );
+      }
+    }
 
     if (isLockedDevisStatus(existing.statut) && !isStatusOnly) {
       return Response.json({
@@ -165,7 +261,7 @@ export async function PATCH(request, { params }) {
       {
         organizationId: existing.organization_id,
         createdBy: existing.created_by,
-        defaultCommercialId: existing.commercial_id,
+        defaultCommercialId: ownerId || existing.commercial_id,
       }
     );
     delete header.created_by;
@@ -180,9 +276,9 @@ export async function PATCH(request, { params }) {
           : "Le numéro de devis ne peut pas être modifié.",
       }, { status: 400 });
     }
-    if (!canViewAllDevis(auth.profile)) {
-      header.commercial_id = existing.commercial_id || auth.user.id;
-    }
+    header.commercial_id = mustAssignDevisCommercial(auth.profile)
+      ? ownerId || null
+      : existing.commercial_id || auth.user.id;
 
     const errors = validateDevisPayload(header, lines);
     if (errors.length) {
@@ -201,11 +297,13 @@ export async function PATCH(request, { params }) {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
     });
-    const savedLines = await serviceRequest("/rest/v1/devis_lignes", {
-      method: "POST",
-      headers: { Prefer: "return=representation" },
-      body: lines.map(line => ({ ...line, devis_id: id })),
-    });
+    const savedLines = lines.length
+      ? await serviceRequest("/rest/v1/devis_lignes", {
+          method: "POST",
+          headers: { Prefer: "return=representation" },
+          body: lines.map(line => ({ ...line, devis_id: id })),
+        })
+      : [];
 
     const updated = updatedRows?.[0] || existing;
     if (existing.statut !== header.statut) {
@@ -293,7 +391,11 @@ export async function PATCH(request, { params }) {
       });
     }
 
-    return Response.json({ document: devisToUi(updated, savedLines || []) });
+    return Response.json({
+      document: devisToUi(updated, savedLines || []),
+      client: conversion?.client || null,
+      convertedProspectId: conversion?.prospectId || null,
+    });
   } catch (error) {
     console.error("Devis update error", error.message);
     return Response.json({ error: error.message || "Mise à jour impossible." }, { status: 502 });
@@ -307,14 +409,19 @@ export async function DELETE(request, { params }) {
     if (!serviceRoleConfigured()) {
       return Response.json({ error: "SUPABASE_SERVICE_ROLE_KEY manquant." }, { status: 503 });
     }
-    if (!isAdminRole(auth.profile.role)) {
+    if (!canManageDevis(auth.profile) || !isAdminRole(auth.profile.role)) {
       return Response.json({ error: "Suppression réservée aux administrateurs." }, { status: 403 });
     }
 
     const { id } = await params;
     const existing = await loadOne(id);
-    if (!existing || existing.organization_id !== auth.profile.organization_id) {
+    if (!existing || !(await canAccessRow(auth.profile, auth.user.id, existing))) {
       return Response.json({ error: "Document introuvable." }, { status: 404 });
+    }
+    if (["Accepté", "Payée"].includes(existing.statut) && !isAdminRole(auth.profile.role)) {
+      return Response.json({
+        error: "Document verrouillé. Dévalidez-le avant suppression.",
+      }, { status: 403 });
     }
 
     await serviceRequest(`/rest/v1/devis?id=eq.${encodeURIComponent(id)}`, {

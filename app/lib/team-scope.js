@@ -3,37 +3,40 @@ import {
   buildCommercialScopeFilter,
   canViewOrgWideCommercialData,
   canViewTeamCommercialData,
+  privateAgendaOwnerIds,
   resolveScopedCommercialIds,
+  teamMemberIdsFromProfiles,
 } from "./scoping";
+import { isProspectDispatcher } from "./prospect-dispatch";
 
-export async function loadTeamMemberIds(profile, userId) {
+export async function loadTeamMemberIds(profile, userId, { forDispatch = false } = {}) {
   if (!profile?.organization_id || !userId) return [userId].filter(Boolean);
-  if (canViewOrgWideCommercialData(profile)) return null;
+  if (canViewOrgWideCommercialData(profile) || (forDispatch && isProspectDispatcher(profile))) return null;
   if (!canViewTeamCommercialData(profile)) return [userId];
 
   const orgId = profile.organization_id;
-  const names = [profile.full_name, profile.email].filter(Boolean);
-  let path = `/rest/v1/profiles?select=id&organization_id=eq.${encodeURIComponent(orgId)}&active=eq.true`;
-  if (names.length) {
-    const managerFilters = names.map(name => `manager.eq.${encodeURIComponent(name)}`).join(",");
-    path += `&or=(id.eq.${encodeURIComponent(userId)},${managerFilters})`;
-  } else {
-    path += `&id=eq.${encodeURIComponent(userId)}`;
-  }
-
   try {
-    const rows = await serviceRequest(path);
-    const ids = [...new Set([userId, ...(rows || []).map(row => row.id)].filter(Boolean))];
-    return ids;
+    const rows = await serviceRequest(
+      `/rest/v1/profiles?select=id,full_name,email,role,manager,active&organization_id=eq.${encodeURIComponent(orgId)}&or=(active.eq.true,active.is.null)`
+    );
+    return teamMemberIdsFromProfiles(profile, userId, rows);
   } catch (error) {
     console.warn("loadTeamMemberIds", error.message);
     return [userId];
   }
 }
 
-export async function commercialScopeQuery(profile, userId, columns = ["commercial_id", "created_by"]) {
-  const teamIds = await loadTeamMemberIds(profile, userId);
-  const scoped = resolveScopedCommercialIds(profile, userId, teamIds || []);
+export async function loadPrivateAgendaOwnerIds(orgId) {
+  if (!orgId) return new Set();
+  const rows = await serviceRequest(
+    `/rest/v1/profiles?select=id,role&organization_id=eq.${encodeURIComponent(orgId)}`
+  );
+  return privateAgendaOwnerIds(rows);
+}
+
+export async function commercialScopeQuery(profile, userId, columns = ["commercial_id", "created_by"], { forDispatch = false } = {}) {
+  const teamIds = await loadTeamMemberIds(profile, userId, { forDispatch });
+  const scoped = resolveScopedCommercialIds(profile, userId, teamIds || [], { forDispatch });
   return buildCommercialScopeFilter(columns, scoped);
 }
 
