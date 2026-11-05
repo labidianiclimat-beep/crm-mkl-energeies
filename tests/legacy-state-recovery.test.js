@@ -7,8 +7,11 @@ import {
   buildLegacyReport,
   clientIdentity,
   diffLegacyRecords,
+  isDemoArticle,
+  isDemoClient,
   legacyArticleToPayload,
   legacyClientToPayload,
+  legacyProspectToPayload,
   mergeLegacySources,
 } from "../app/lib/legacy-state-recovery.js";
 
@@ -112,6 +115,43 @@ test("un rapport sans ancien stockage est vide", () => {
   assert.equal(report.recoverable, 0);
 });
 
+test("les clients de demonstration ne sont pas recuperes", () => {
+  assert.equal(isDemoClient({ name: "EARL Bellevue", email: "paul@bellevue.fr" }), true);
+  assert.equal(isDemoClient({ name: "SCI Horizon" }), true);
+  assert.equal(isDemoClient({ name: "Jean Dupont (exemple)", email: "jean.dupont.exemple@mkl-demo.fr" }), true);
+  assert.equal(isDemoClient({ name: "Client réel Nantes", email: "real@example.fr", city: "Nantes" }), false);
+});
+
+test("le rapport ignore les clients de demonstration", () => {
+  const report = buildLegacyReport({
+    legacy: {
+      clients: [[{ name: "EARL Bellevue", email: "paul@bellevue.fr" }, { email: "real@x.fr" }]],
+    },
+    current: { clients: [] },
+  });
+  assert.equal(report.clients.length, 1);
+  assert.equal(report.clients[0].email, "real@x.fr");
+  assert.equal(report.recoverable, 1);
+});
+
+test("les articles de demonstration ne sont pas recuperes", () => {
+  assert.equal(isDemoArticle({ code: "PV-450W" }), true);
+  assert.equal(isDemoArticle({ reference: "MO-POSE" }), true);
+  assert.equal(isDemoArticle({ code: "ZUB12M MONO ZUBADAN SILENCE 12 R32 CHAUFFAGE SEUL" }), false);
+});
+
+test("le rapport ignore les articles de demonstration", () => {
+  const report = buildLegacyReport({
+    legacy: {
+      articles: [[{ code: "PV-450W" }, { code: "ART-REEL" }]],
+    },
+    current: { articles: [] },
+  });
+  assert.equal(report.articles.length, 1);
+  assert.equal(report.articles[0].code, "ART-REEL");
+  assert.equal(report.recoverable, 1);
+});
+
 test("les charges utiles reprennent les champs attendus par les API", () => {
   const client = legacyClientToPayload({
     firstName: "Jean",
@@ -121,8 +161,25 @@ test("les charges utiles reprennent les champs attendus par les API", () => {
   });
   assert.equal(client.name, "Jean Dupont");
   assert.equal(client.contact, "Jean Dupont");
-  assert.equal(client.status, "Actif");
+  assert.equal(client.status, "Prospect");
   assert.equal(client.customerType, "Particulier");
+  assert.equal(legacyClientToPayload({ ...client, status: "Actif" }).status, "Client");
+
+  const prospect = legacyProspectToPayload({
+    name: "SCI Horizon",
+    phone: "0612345678",
+    address: "12 rue de la Paix",
+    postalCode: "44500",
+    city: "La Baule",
+    start: "2026-09-20T09:00:00.000Z",
+    kind: "rendez-vous",
+  });
+  assert.equal(prospect.phone, "0612345678");
+  assert.equal(prospect.address, "12 rue de la Paix");
+  assert.equal(prospect.postalCode, "44500");
+  assert.equal(prospect.actionKind, "rendez-vous");
+  assert.equal(prospect.start, "2026-09-20T09:00:00.000Z");
+  assert.notEqual(prospect.phone, "0000000000");
 
   const article = legacyArticleToPayload({ code: "ART-1", name: "Panneau", sell: "120" });
   assert.equal(article.code, "ART-1");
