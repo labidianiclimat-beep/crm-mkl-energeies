@@ -1,9 +1,22 @@
 "use client";
 
-const projectUrl=process.env.NEXT_PUBLIC_SUPABASE_URL||"https://rzkwmwtjnwnmmcexwoov.supabase.co";
-const publishableKey=process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||"sb_publishable_egPsJQ5koBZHRPhT4dPhFw_Ffiz67B3";
+import {
+  REFRESH_AHEAD_MS,
+  SESSION_IDLE_FLAG,
+  SESSION_IDLE_MESSAGE,
+  accessTokenMsLeft,
+  isSessionExpired,
+  nextLastActivityAt,
+  sessionStartedAt,
+} from "./session-idle.js";
+import { fieldStoreForUser, isNetworkFailure, readFieldStore, rememberFieldProfile, writeFieldStore } from "./offline-field.js";
+import { clearRolePreview, rolePreviewHeaders } from "./role-preview.js";
+
+const projectUrl=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim();
+const publishableKey=String(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||"").trim();
 const sessionKey="mkl-supabase-session";
 let profilePromise;
+let refreshFlight;
 
 export const cloudConfigured=Boolean(projectUrl&&publishableKey);
 
@@ -61,8 +74,75 @@ function readSession() {
   catch { return null; }
 }
 
+function freeLocalStorageForSession() {
+  const keys = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key && key.startsWith("mkl-") && key !== sessionKey) keys.push(key);
+  }
+  keys.forEach(key => localStorage.removeItem(key));
+}
+
 function saveSession(session) {
-  localStorage.setItem(sessionKey,JSON.stringify(session));
+  if (!session) {
+    localStorage.removeItem(sessionKey);
+    return;
+  }
+  const previous = readSession();
+  const payload = JSON.stringify({
+    ...session,
+    last_activity_at: Number(session.last_activity_at || previous?.last_activity_at || Date.now()),
+    connected_at: Number(session.connected_at || previous?.connected_at || Date.now()),
+  });
+  try {
+    localStorage.setItem(sessionKey, payload);
+  } catch {
+    freeLocalStorageForSession();
+    try {
+      localStorage.setItem(sessionKey, payload);
+    } catch {
+      throw new Error("Cet appareil n’a plus de place pour ouvrir la session. Rechargez la page, puis réessayez.");
+    }
+  }
+}
+
+function markIdleLogout() {
+  try { sessionStorage.setItem(SESSION_IDLE_FLAG, "1"); } catch {}
+}
+
+function clearExpiredIdleSession() {
+  markIdleLogout();
+  localStorage.removeItem(sessionKey);
+  profilePromise = null;
+}
+
+export function markSessionActivity(now = Date.now()) {
+  const session = readSession();
+  if (!session?.access_token) return;
+  saveSession({ ...session, last_activity_at: now });
+}
+
+export function consumeIdleLogoutMessage() {
+  try {
+    if (sessionStorage.getItem(SESSION_IDLE_FLAG) !== "1") return "";
+    sessionStorage.removeItem(SESSION_IDLE_FLAG);
+    return SESSION_IDLE_MESSAGE;
+  } catch {
+    return "";
+  }
+}
+
+export function sessionIsExpired(now = Date.now()) {
+  return isSessionExpired(readSession(), now);
+}
+
+export function sessionIsIdle(now = Date.now()) {
+  return sessionIsExpired(now);
+}
+
+function sessionMsLeft(session, now = Date.now()) {
+  const jwtExp = Number(decodeJwtPayload(session?.access_token)?.exp || 0);
+  return accessTokenMsLeft({ jwtExp, expiresAt: session?.expires_at }, now);
 }
 
 export function saveBootstrapSession({ accessToken, refreshToken }) {
@@ -71,11 +151,14 @@ export function saveBootstrapSession({ accessToken, refreshToken }) {
     access_token: accessToken,
     refresh_token: refreshToken || "",
     expires_at: tokenExpiry(accessToken),
+    last_activity_at: Date.now(),
+    connected_at: Date.now(),
   });
   profilePromise = null;
 }
 
 async function request(path,{method="GET",body,token,headers={}}={}) {
+  if(!projectUrl||!publishableKey) throw new Error("Configuration Supabase incomplète.");
   const response=await fetch(`${projectUrl}${path}`,{
     method,
     headers:{
@@ -93,43 +176,68 @@ async function request(path,{method="GET",body,token,headers={}}={}) {
   return payload;
 }
 
-async function activeSession() {
-  let session = readSession();
-  if (!session?.access_token) return null;
-
-  const jwtExp = Number(tokenExpiry(session.access_token) || 0);
-  const rawStored = Number(session.expires_at || 0);
-  // Certains flux stockent déjà des ms ; normaliser en secondes
-  const storedExp = rawStored > 1e12 ? Math.floor(rawStored / 1000) : rawStored;
-  const expSec = Math.max(jwtExp, storedExp);
-  const msLeft = expSec * 1000 - Date.now();
-
-  if (msLeft > 60_000) return session;
-
-  if (!session.refresh_token) {
-    if (msLeft > 0) return session;
-    localStorage.removeItem(sessionKey);
-    return null;
-  }
-
+async function performRefresh(session) {
+  const previousToken = session.access_token;
+  const last = session.last_activity_at;
+  const connectedAt = session.connected_at;
   try {
-    session = await request("/auth/v1/token?grant_type=refresh_token", {
+    const refreshed = await request("/auth/v1/token?grant_type=refresh_token", {
       method: "POST",
       body: { refresh_token: session.refresh_token },
     });
-    saveSession({
-      ...session,
-      expires_at: session.expires_at || tokenExpiry(session.access_token),
-    });
-    return session;
-  } catch {
+    const next = {
+      ...refreshed,
+      expires_at: refreshed.expires_at || tokenExpiry(refreshed.access_token),
+      last_activity_at: last,
+      connected_at: connectedAt,
+    };
+    saveSession(next);
+    return next;
+  } catch (error) {
+    const current = readSession();
+    if (current?.access_token && current.access_token !== previousToken) return current;
+    if (isNetworkFailure(error)) return current || session;
+    if (!isSessionExpired(current || session)) return current || session;
     localStorage.removeItem(sessionKey);
+    profilePromise = null;
     return null;
   }
 }
 
-export async function getAccessToken() {
-  const session = await activeSession();
+function refreshStoredSession(session) {
+  if (refreshFlight) return refreshFlight;
+  refreshFlight = performRefresh(session).finally(() => {
+    refreshFlight = null;
+  });
+  return refreshFlight;
+}
+
+async function activeSession({ forceRefresh = false } = {}) {
+  let session = readSession();
+  if (!session?.access_token) return null;
+
+  const lastActivityAt = nextLastActivityAt(session);
+  const connectedAt = sessionStartedAt(session);
+  if (!session.last_activity_at || !session.connected_at) {
+    session = { ...session, last_activity_at: lastActivityAt, connected_at: connectedAt };
+    saveSession(session);
+  }
+  if (isSessionExpired(session)) {
+    clearExpiredIdleSession();
+    return null;
+  }
+
+  const msLeft = sessionMsLeft(session);
+  const due = forceRefresh || msLeft <= REFRESH_AHEAD_MS;
+  if (!due) return session;
+
+  if (!session.refresh_token) return session;
+
+  return refreshStoredSession(session);
+}
+
+export async function getAccessToken({ forceRefresh = false } = {}) {
+  const session = await activeSession({ forceRefresh });
   return session?.access_token || null;
 }
 
@@ -142,7 +250,7 @@ export async function authFetch(url, options = {}) {
   if (!token) {
     throw new Error("Session expirée. Reconnectez-vous avec votre email et votre PIN.");
   }
-  const headers = new Headers(options.headers || {});
+  const headers = rolePreviewHeaders(options.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   return fetch(url, { ...options, headers });
 }
@@ -152,7 +260,7 @@ export async function signIn(email,password) {
     method:"POST",
     body:{email,password}
   });
-  saveSession(session);
+  saveSession({ ...session, connected_at: Date.now(), last_activity_at: Date.now() });
   profilePromise=null;
   return session;
 }
@@ -180,6 +288,8 @@ export async function signInWithPin(email, pin) {
     refresh_token: data.refresh_token || "",
     expires_at: data.expires_at || tokenExpiry(data.access_token),
     user: data.user || null,
+    last_activity_at: Date.now(),
+    connected_at: Date.now(),
   });
   profilePromise = null;
   return data;
@@ -286,13 +396,15 @@ export async function requestAccessLink(email) {
   }
 }
 
-export async function signOut() {
+export async function signOut({ keepRolePreview = false } = {}) {
   const session=readSession();
   try {
     if(session?.access_token) await request("/auth/v1/logout",{method:"POST",token:session.access_token});
   } catch {}
   localStorage.removeItem(sessionKey);
   profilePromise=null;
+  try { localStorage.removeItem("mkl-field-store-v1"); } catch {}
+  if (!keepRolePreview) clearRolePreview();
 }
 
 export async function hasCloudSession() {
@@ -308,12 +420,24 @@ export async function getCurrentProfile() {
 
     try {
       const response=await fetch("/api/auth/me",{
-        headers:{Authorization:`Bearer ${accessToken}`},
+        headers:rolePreviewHeaders({Authorization:`Bearer ${accessToken}`}),
       });
       const text=await response.text();
       const data=text?JSON.parse(text):null;
-      if(data?.authenticated&&data.profile) return data.profile;
-    } catch {}
+      if(data?.authenticated&&data.profile) {
+        const userId=data.profile.id||session?.user?.id||userIdFromAccessToken(accessToken);
+        if(typeof localStorage!=="undefined"&&userId) {
+          writeFieldStore(rememberFieldProfile(readFieldStore(localStorage), userId, data.profile), localStorage);
+        }
+        return data.profile;
+      }
+    } catch (error) {
+      if(isNetworkFailure(error)&&typeof localStorage!=="undefined") {
+        const userId=session?.user?.id||userIdFromAccessToken(accessToken);
+        const cached=fieldStoreForUser(readFieldStore(localStorage), userId);
+        if(cached?.profile) return cached.profile;
+      }
+    }
 
     const userId=session?.user?.id||userIdFromAccessToken(accessToken);
     if(!userId) return null;
