@@ -1,0 +1,33 @@
+[Unit]
+Description=Appel du CRM pour traiter la file des demandes du site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Pas de recouvrement : une exécution lente ne doit pas voir la suivante
+# démarrer par-dessus. Le CRM s'en protège déjà par ses verrous de file, mais
+# empiler des appels inutiles n'apporte rien.
+ExecStart=/usr/local/bin/mkl-crm-queue
+TimeoutStartSec=50
+User=mkl
+Group=mkl
+
+# Le service ne lit qu'un fichier de configuration et n'écrit qu'un fichier
+# temporaire : tout le reste du système lui est inutile.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+ReadOnlyPaths=/etc/mkl
+
+[Install]
+WantedBy=multi-user.target
