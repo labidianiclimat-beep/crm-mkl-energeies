@@ -21,3 +21,8 @@ tmp
 *.dump
 *.sql.gz
 *.backup
+
+# Socle de recette : fichier assemblé, régénérable par
+# scripts/recette/construire-schema.mjs. Il recopierait 2,6 Mo de contenu
+# déjà présent dans supabase/migrations/.
+scripts/recette/schema-recette.sql

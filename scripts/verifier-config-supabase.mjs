@@ -30,9 +30,52 @@ completerDepuis(".env");
 completerDepuis(".env.local");
 
 const manquantes = REQUIS.filter(nom => !String(process.env[nom] || "").trim());
-if (!manquantes.length) process.exit(0);
+if (manquantes.length) {
+  console.error("Build arrêté : configuration Supabase incomplète.");
+  console.error(`Variables absentes : ${manquantes.join(", ")}.`);
+  console.error("Renseignez-les dans l'environnement de build. Aucune base de production n'est utilisée par défaut.");
+  process.exit(1);
+}
 
-console.error("Build arrêté : configuration Supabase incomplète.");
-console.error(`Variables absentes : ${manquantes.join(", ")}.`);
-console.error("Renseignez-les dans l'environnement de build. Aucune base de production n'est utilisée par défaut.");
-process.exit(1);
+// ---------------------------------------------------------------------------
+// Cloisonnement des environnements
+//
+// Le contrôle ci-dessus exige les variables publiques partout, y compris en
+// Preview. La pente naturelle est donc de les poser pour les trois
+// environnements, ce qui donne à Preview les identifiants de la production.
+//
+// Refuser ici fait échouer la compilation : le déploiement Preview n'existe
+// alors jamais, et ne peut donc rien écrire. Le même verdict est réévalué à
+// l'exécution, pour le cas où les variables changeraient après un build.
+// ---------------------------------------------------------------------------
+
+const { currentEnvironmentVerdict, environmentRejectionMessage } = await import(
+  "../app/lib/supabase-environment.js"
+);
+
+const verdict = currentEnvironmentVerdict();
+if (!verdict.ok) {
+  console.error(`Build arrêté : ${verdict.reason}.`);
+  console.error(environmentRejectionMessage(verdict));
+  console.error(`Environnement : ${verdict.deploymentEnv}.`);
+  process.exit(1);
+}
+
+// Une anomalie sans refus existe aussi, en production uniquement. Elle doit
+// se voir dans le journal de build sans empêcher la mise en ligne.
+if (verdict.warning) {
+  console.warn(`Avertissement : ${verdict.warning}.`);
+  console.warn(environmentRejectionMessage(verdict));
+}
+
+// `SUPABASE_PRODUCTION_REF` n'est pas un secret : elle figure déjà dans l'URL
+// publique. Son absence n'arrête pas le build, mais elle laisse le second
+// contrôle sans effet, ce qui doit se voir plutôt que de passer en silence.
+if (!verdict.productionRef) {
+  console.warn(
+    "Avertissement : SUPABASE_PRODUCTION_REF n'est pas renseignée. " +
+      "Un déploiement Preview visant la production ne sera pas détecté."
+  );
+}
+
+process.exit(0);

@@ -1,3 +1,5 @@
+import { currentEnvironmentVerdict, environmentRejectionMessage } from "./supabase-environment.js";
+
 function cleanEnv(value) {
   return String(value || "").trim().replace(/\s+/g, "");
 }
@@ -6,9 +8,35 @@ const projectUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
 const publishableKey = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
+/**
+ * Cloisonnement des environnements, évalué une seule fois au chargement.
+ *
+ * Le verdict passe par le même chemin que la configuration absente : les
+ * routes renvoient donc 503 sans qu'aucune n'ait à être modifiée. Un
+ * déploiement Preview qui aurait reçu les identifiants de production refuse
+ * ainsi de servir, au lieu d'écrire dans la base réelle.
+ *
+ * Le motif est écrit une fois dans les journaux, et il ne contient aucune clé.
+ */
+const environnement = currentEnvironmentVerdict();
+if (!environnement.ok) {
+  console.error(`Supabase refusé : ${environnement.reason} — ${environmentRejectionMessage(environnement)}`);
+} else if (environnement.warning) {
+  // Signalé sans bloquer : en production, couper l'accès sur ce seul motif
+  // ferait plus de dégâts que l'incohérence qu'il décrit.
+  console.warn(`Supabase, anomalie de configuration : ${environnement.warning} — ${environmentRejectionMessage(environnement)}`);
+}
+
 function configurationManquante() {
   const error = new Error("Configuration Supabase incomplète.");
   error.code = "SUPABASE_NOT_CONFIGURED";
+  error.status = 503;
+  return error;
+}
+
+function environnementRefuse() {
+  const error = new Error("Configuration Supabase incomplète.");
+  error.code = environnement.reason;
   error.status = 503;
   return error;
 }
@@ -25,14 +53,20 @@ async function requestAsGateway(path, options = {}) {
 }
 
 export function supabaseConfigured() {
-  return Boolean(projectUrl && publishableKey);
+  return Boolean(environnement.ok && projectUrl && publishableKey);
 }
 
 export function serviceRoleConfigured() {
-  return Boolean(projectUrl && serviceRoleKey);
+  return Boolean(environnement.ok && projectUrl && serviceRoleKey);
+}
+
+/** Verdict de cloisonnement, pour les contrôles d'exploitation. */
+export function supabaseEnvironment() {
+  return { ...environnement };
 }
 
 async function request(path, { method = "GET", body, token, apiKey, headers = {} } = {}) {
+  if (!environnement.ok) throw environnementRefuse();
   const cle = apiKey || publishableKey;
   if (!projectUrl || !cle) throw configurationManquante();
   const response = await fetch(`${projectUrl}${path}`, {
