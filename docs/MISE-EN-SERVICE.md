@@ -12,18 +12,40 @@ suivante. L'ordre proposé va du moins risqué au plus engageant.
 | Élément | État |
 |---|---|
 | Chaîne OVH → CRM → Supabase RECETTE | éprouvée, 10 contrôles depuis le VPS |
-| Attribution Google Ads, Facebook, Site | éprouvée de bout en bout, 19 contrôles sur 20 |
+| Attribution Google Ads, Facebook, Site | éprouvée sur un déploiement, 20 contrôles sur 20 |
+| Clé Google Solar | renouvelée sur la recette, éprouvée en ligne, 11 sur 11 |
+| Archive de déploiement | contrôlée, sans secret ni identifiant de production |
 | Clé SSH du VPS | installée sur le compte `ubuntu` |
 | Site en ligne | version du 3 novembre, sans l'attribution |
 | Arbre du site dans ce dépôt | complet |
-| `GOOGLE_SOLAR_API_KEY`, `CRM_ACCESS_PIN` | exposés dans 17 archives, à renouveler |
+| `GOOGLE_SOLAR_API_KEY` | renouvelée sur Production et Preview, déploiement à venir |
+| `CRM_ACCESS_PIN` | rien à renouveler : inutilisée en production, voir plus bas |
 
 ## 1. Renouveler les deux secrets
 
 Les deux figuraient dans `.env.local`, lui-même embarqué dans les archives des
 déploiements antérieurs au 7 novembre 04 h 25.
 
-### Le code d'accès du CRM
+### Le code d'accès du CRM : rien à renouveler
+
+Vérifié après coup, et le constat renverse le plan prévu : **`CRM_ACCESS_PIN`
+n'est déclarée sur aucun environnement Vercel.** Les dix-huit variables de
+production ne la contiennent pas.
+
+Ce n'est pas un oubli de configuration qui laisserait le CRM ouvert. La porte
+réelle est `CrmAccessGate`, monté par `app/layout.js`, qui authentifie par
+Supabase — adresse électronique et PIN d'activation stocké haché en base. Le
+composant qui lit `CRM_ACCESS_PIN`, `crm-login-gate.js`, **n'est monté nulle
+part** : c'est du code mort, et les trois routes `/api/auth/login`,
+`/api/auth/session` et `/api/auth/logout` qui le servent ne sont appelées que
+par lui. Sans code configuré, elles répondent 503 et la porte reste fermée :
+elles échouent du bon côté.
+
+Conséquence pratique : la valeur de `CRM_ACCESS_PIN` présente dans les archives
+exposées **ne donne accès à rien en production**. Le renouvellement en deux
+temps décrit ci-dessous reste disponible, mais il n'a aujourd'hui aucun objet.
+
+### Le code d'accès du CRM, si la porte était un jour remise en service
 
 Le code sert à l'ouverture de session des équipes. Le renouveler brutalement
 bloquerait tout le monde à la bascule ; le code accepte donc désormais une
@@ -214,6 +236,9 @@ Aucune demande n'est perdue, la file les conserve.
 Dans cet ordre, du moins coûteux au plus engageant.
 
 ```sh
+# 0. Avant tout déploiement : ce que l'archive emporterait
+node scripts/mise-en-service/verifier-archive-vercel.mjs
+
 # 1. Toute la batterie, sans écriture nulle part
 npm run test:cloisonnement
 
@@ -227,6 +252,10 @@ node scripts/recette/test-formulaires-ovh.mjs --nettoyer
 
 # 4. Depuis le VPS, par le vrai réseau
 sh scripts/recette/test-depuis-vps.sh "https://<deploiement-recette>/api/web-leads"
+
+# 5. Calcul photovoltaïque sur le déploiement, avec la clé en place
+node scripts/recette/test-pv-solar.mjs --complet "https://<deploiement-recette>"
+node scripts/recette/test-pv-solar.mjs --nettoyer
 ```
 
 Le troisième est le seul qui éprouve l'assemblage complet : vrai serveur, vrai
