@@ -29,3 +29,7 @@ scripts/recette/schema-recette.sql
 
 # Lots du socle de recette : assemblés par scripts/recette/decouper-socle.mjs.
 scripts/recette/lots/
+
+# Données et substituts locaux du site OVH : jamais versionnés, pour qu un
+# substitut de recette ne puisse pas être déployé à la place du vrai fichier.
+ovh-site/data/

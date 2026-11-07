@@ -65,6 +65,19 @@ bilan "$PASS réussi(s), ${FAIL:-0} échoué(s)"
 [ "${FAIL:-0}" = "0" ] || echec "le site et le CRM ne s'accordent plus sur le format"
 
 # ---------------------------------------------------------------------------
+titre "Complétude de l'arbre du site OVH"
+# Non bloquant à dessein : les manques relevés ici n'empêchent pas le
+# cloisonnement d'être correct, et le déploiement depuis ce dépôt est de toute
+# façon refusé par deploy.sh. Mais ils bloquent la mise en service, et les
+# passer sous silence reviendrait à l'oublier.
+if "$NODE" scripts/mise-en-service/verifier-site-complet.mjs >/tmp/mkl-site.log 2>&1; then
+  bilan "arbre complet"
+else
+  bilan "ARBRE INCOMPLET — bloque la mise en service, pas ces contrôles"
+  grep -E "^\s+(✗|ovh-site|/lib|absents)" /tmp/mkl-site.log | sed 's/^ */       /'
+fi
+
+# ---------------------------------------------------------------------------
 titre "Cloisonnement des environnements, avant compilation"
 if "$NODE" scripts/verifier-config-supabase.mjs >/tmp/mkl-config.log 2>&1; then
   bilan "conforme"

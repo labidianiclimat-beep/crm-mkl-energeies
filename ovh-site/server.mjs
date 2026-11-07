@@ -64,7 +64,11 @@ const PORT = Number(process.env.PORT) || 4317;
 const ROOT = __dirname;
 const COVERS_PATH = path.join(ROOT, "data", "covers.json");
 const CATEGORY_COVERS_PATH = path.join(ROOT, "data", "category-covers.json");
-const DATA_DIR = path.join(ROOT, "data");
+// Détournable pour les essais, afin qu'une recette n'écrive jamais dans les
+// données du site. Sans la variable, le comportement est celui d'avant.
+const DATA_DIR = process.env.MKL_DATA_DIR
+  ? path.resolve(process.env.MKL_DATA_DIR)
+  : path.join(ROOT, "data");
 const LEADS_PATH = path.join(DATA_DIR, "leads.json");
 const APPTS_PATH = path.join(DATA_DIR, "appointments.json");
 const OUTBOX_PATH = path.join(DATA_DIR, "crm-outbox.json");
@@ -1058,14 +1062,17 @@ async function runCrmOutbox() {
   try {
     // À l'intérieur du try : une erreur ici laisserait sinon le verrou fermé
     // et éteindrait la synchronisation jusqu'au redémarrage.
-    const { endpoint, keyId, secret } = crmSyncConfig();
-    const result = await processCrmOutbox(DATA_DIR, OUTBOX_PATH, {
-      enabled: true,
-      async send(job) {
-        const record = await crmJobRecord(job);
-        return sendCrmJob(job, { record, endpoint, keyId, secret });
-      },
-    });
+      // Le jeton de contournement n'est pas un réglage du CRM mais de Vercel :
+      // sans lui, « Vercel Authentication » renvoie 401 avant que la requête
+      // n'atteigne la route d'ingestion, et la signature n'est jamais lue.
+      const { endpoint, keyId, secret, bypassToken } = crmSyncConfig();
+      const result = await processCrmOutbox(DATA_DIR, OUTBOX_PATH, {
+        enabled: true,
+        async send(job) {
+          const record = await crmJobRecord(job);
+          return sendCrmJob(job, { record, endpoint, keyId, secret, bypassToken });
+        },
+      });
     if (result.sent || result.failed) {
       console.log(`[crm-sync] transmis ${result.sent} — échecs ${result.failed}`);
     }

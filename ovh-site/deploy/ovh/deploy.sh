@@ -36,6 +36,8 @@ rsync -avz --delete \
   --exclude 'data/category-covers.json' \
   --exclude 'data/consent-proofs.jsonl' \
   --exclude 'data/crm-outbox.json' \
+  --exclude 'data/slots.js' \
+  --exclude 'data/realisations.js' \
   --exclude 'data/.store.lock' \
   --exclude 'data/.*.tmp' \
   --exclude 'data/proofs' \
