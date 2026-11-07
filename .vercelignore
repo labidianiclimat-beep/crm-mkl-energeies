@@ -23,6 +23,17 @@ scripts/recette/lots
 scripts/recette/schema-recette.sql
 supabase/.temp
 
+# Compilation locale. Ce point mérite une explication, parce qu'il est
+# contre-intuitif : .next est dans .gitignore, mais .gitignore ne s'applique
+# plus dès que ce fichier existe. Sans la ligne ci-dessous, une compilation
+# locale partait donc réellement dans l'archive — et une compilation locale est
+# faite avec .env.local, c'est à dire avec l'adresse Supabase de PRODUCTION
+# gravée dans le code. Une archive de prévisualisation n'a pas à la transporter.
+.next
+
+# Dépendances, reconstruites par la plateforme à partir du verrou.
+node_modules
+
 # Dossiers de travail locaux.
 .cursor
 dist
