@@ -193,27 +193,105 @@ FIN
 # ---------------------------------------------------------------------------
 # Simulation. Montre les écritures et, surtout, les suppressions qu'un
 # `--delete` ferait — sans en faire aucune.
+#
+# `-c` compare les empreintes et non les horodatages. Sans lui, la simulation
+# annonçait une trentaine de fichiers « à transférer » qui n'étaient que des
+# dates à rafraîchir, et noyait les trois vrais changements. Pire, un fichier
+# de même taille mais de contenu différent aurait été transféré sans être
+# signalé comme modifié : on aurait écrasé en croyant ne rien faire. C'est
+# précisément le piège qui a caché pendant quatre jours que le dépôt était en
+# retard sur la production. Le déploiement l'emploie aussi, pour n'écrire que
+# ce qui change réellement.
 # ---------------------------------------------------------------------------
 simuler() {
   echo_titre "Simulation — aucune écriture"
+
+  # Résumé en clair avant le détail. Les codes de rsync — `<fcst....`,
+  # `<f+++++++`, `.f..t....` — ne se lisent pas sans mode d emploi : un `<` en
+  # tête annonce un transfert, un point annonce qu il n y en aura pas. Qui lit
+  # cette sortie avant de déployer doit voir d abord combien de fichiers
+  # changent, et lesquels.
+  resume() {
+    printf '  Ce que le déploiement écrirait réellement :\n'
+    CHANGES=$(
+      { rsync -naizc --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
+          "$RACINE/site-public/" "$HOTE:$DISTANT/"
+        # shellcheck disable=SC2086
+        (cd "$RACINE" && rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
+          $FICHIERS_SERVEUR "$HOTE:$DISTANT/")
+        rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
+          "$RACINE/lib/" "$HOTE:$DISTANT/lib/" | sed 's/ / lib\//'
+      } | grep '^<f' || true
+    )
+    NOUVEAUX=$(printf '%s\n' "$CHANGES" | grep -c '^<f+++' || true)
+    MODIFIES=$(printf '%s\n' "$CHANGES" | grep '^<f' | grep -vc '^<f+++' || true)
+    printf '%s\n' "$CHANGES" | grep '^<f+++' | awk '{print "    nouveau  " $2}' || true
+    printf '%s\n' "$CHANGES" | grep '^<f' | grep -v '^<f+++' | awk '{print "    modifié  " $2}' || true
+    printf '    soit %s nouveau(x) et %s modifié(s). Aucune suppression.\n\n' \
+      "${NOUVEAUX:-0}" "${MODIFIES:-0}"
+  }
+  resume
+
+  printf '  Détail, au format de rsync. Un « < » en tête annonce un transfert,\n'
+  printf '  un « . » annonce qu il n y en aura pas — seule la date change.\n\n'
   printf '  Pages publiques, de site-public/ vers la racine distante :\n'
-  rsync -naiz --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
+  rsync -naizc --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
     "$RACINE/site-public/" "$HOTE:$DISTANT/" | sed 's/^/    /'
 
   printf '\n  Serveur et bibliothèques :\n'
   # shellcheck disable=SC2086
-  rsync -naiz --no-perms --omit-dir-times -e "$SSH" \
+  rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
     $(cd "$RACINE" && printf "%s " $FICHIERS_SERVEUR) "$HOTE:$DISTANT/" 2>/dev/null \
     | sed 's/^/    /' || true
-  rsync -naiz --no-perms --omit-dir-times -e "$SSH" \
+  rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
     "$RACINE/lib/" "$HOTE:$DISTANT/lib/" | sed 's/^/    /'
 
-  printf '\n  Fichiers présents sur le serveur et absents du dépôt.\n'
-  printf '  AUCUN n est supprimé par ce script. Ils sont listés pour que vous\n'
-  printf '  décidiez vous-même, le dépôt n étant pas un miroir du serveur :\n'
-  rsync -naiz --delete --no-perms --omit-dir-times -e "$SSH" \
+  # Orphelins : fichiers encore servis par le serveur que le dépôt ne connaît
+  # plus. Une page retirée du site, un module renommé.
+  #
+  # La comparaison est restreinte aux surfaces que le déploiement gère. Une
+  # première version comparait `site-public/` à toute la racine distante : elle
+  # annonçait plus de mille orphelins, dont `server.mjs`, `lib/`, `assets/`,
+  # `data/leads.json` et `.env`, en invitant à « décider vous-même ». C était
+  # faux et dangereux — suivre cette liste aurait effacé le site et les
+  # demandes des clients. Le dépôt n est pas un miroir du serveur : les images,
+  # les dépendances, les fichiers d infrastructure et les données vivantes
+  # n ont jamais vocation à y figurer, et ne sont donc pas des orphelins.
+  printf '\n  Fichiers encore servis que le dépôt ne connaît plus.\n'
+  printf '  AUCUN n est supprimé par ce script. La comparaison ne porte que sur\n'
+  printf '  ce que le déploiement gère : pages publiques et modules de lib/.\n'
+  ORPHELINS=0
+
+  # Pages publiques, à la racine distante. Tout ce que le dépôt ne mirroite
+  # pas délibérément est écarté : données vivantes, images, dépendances,
+  # fichiers d infrastructure, et les fichiers serveur poussés nommément.
+  PAGES=$(rsync -naizc --delete --no-perms --omit-dir-times -e "$SSH" \
+    --exclude 'LISEZ-MOI.md' \
+    --exclude 'data/' --exclude 'assets/' --exclude 'node_modules/' \
+    --exclude 'lib/' --exclude 'proofs/' --exclude '.well-known/' \
+    --exclude 'server.mjs' --exclude 'admin.js' \
+    --exclude 'admin.html' --exclude 'admin.css' \
+    --exclude 'package.json' --exclude 'package-lock.json' \
+    --exclude 'Dockerfile' --exclude 'Procfile' --exclude 'render.yaml' \
+    --exclude 'vite.config.ts' --exclude 'tsconfig*.json' \
+    --exclude '.env' --exclude '.env.example' \
+    --exclude '.dockerignore' --exclude '.gitignore' --exclude 'README.md' \
     "$RACINE/site-public/" "$HOTE:$DISTANT/" \
-    | rg '^\*deleting' | sed 's/^/    /' || printf '    (aucun)\n'
+    | grep '^\*deleting' | sed 's/^\*deleting /pages : /' || true)
+
+  # `lib/` est, lui, un vrai miroir : le dépôt y est la référence.
+  MODULES=$(rsync -naizc --delete --no-perms --omit-dir-times -e "$SSH" \
+    "$RACINE/lib/" "$HOTE:$DISTANT/lib/" \
+    | grep '^\*deleting' | sed 's/^\*deleting /lib   : /' || true)
+
+  TOUS=$(printf '%s\n%s\n' "$PAGES" "$MODULES" | grep . || true)
+  if [ -n "$TOUS" ]; then
+    printf '%s\n' "$TOUS" | sed 's/^/    /'
+    ORPHELINS=$(printf '%s\n' "$TOUS" | grep -c .)
+    printf '\n  %s orphelin(s). À vous de décider : ce script n y touche pas.\n' "$ORPHELINS"
+  else
+    printf '    (aucun)\n'
+  fi
   printf '\n'
 }
 
@@ -239,15 +317,15 @@ deployer() {
   # LISEZ-MOI.md est une note de travail expliquant pourquoi ce dossier
   # existe. Déployée, elle serait servie publiquement : aucun refus nginx ne
   # la couvre, seul « README.md » est nommé.
-  rsync -az --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
+  rsync -azc --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
     "$RACINE/site-public/" "$HOTE:$DISTANT/"
 
   printf '  Envoi du serveur et des bibliothèques…\n'
   # shellcheck disable=SC2086
-  (cd "$RACINE" && rsync -az --no-perms --omit-dir-times -e "$SSH" $FICHIERS_SERVEUR "$HOTE:$DISTANT/")
-  rsync -az --no-perms --omit-dir-times -e "$SSH" "$RACINE/lib/" "$HOTE:$DISTANT/lib/"
+  (cd "$RACINE" && rsync -azc --no-perms --omit-dir-times -e "$SSH" $FICHIERS_SERVEUR "$HOTE:$DISTANT/")
+  rsync -azc --no-perms --omit-dir-times -e "$SSH" "$RACINE/lib/" "$HOTE:$DISTANT/lib/"
   # shellcheck disable=SC2086
-  (cd "$RACINE" && rsync -az --no-perms --omit-dir-times -e "$SSH" $DONNEES_PUBLIQUES "$HOTE:$DISTANT/data/")
+  (cd "$RACINE" && rsync -azc --no-perms --omit-dir-times -e "$SSH" $DONNEES_PUBLIQUES "$HOTE:$DISTANT/data/")
 
   printf '\n  Redémarrage…\n'
   $SSH "$HOTE" "sudo systemctl restart mkl-energies && sudo systemctl --no-pager is-active mkl-energies" | sed 's/^/    /'

@@ -691,6 +691,43 @@ Trois défauts trouvés au passage, qui n'avaient rien à voir avec l'attributio
   consulte. La vraie liste est dans `lib/public-static.mjs`.
 - `safePath`, `writeJsonArray` et la table `MIME` n'avaient plus d'appelant.
 
+### Simulation du 7 novembre 2026 — ce que le déploiement écrirait
+
+**Dix fichiers, aucune suppression, aucun orphelin.** Sept nouveaux modules dans
+`lib/` — capture de provenance, file d'attente, envoi signé, stockage à verrou,
+lecture de provenance, écriture des demandes, service statique durci — et trois
+fichiers modifiés : `app.js`, `admin.js`, `server.mjs`.
+
+Toutes les autres pages publiques sont **identiques octet pour octet** à ce que
+le serveur sert aujourd'hui. C'est une confirmation indépendante que la
+reconstitution de `site-public/` par HTTPS du 5 novembre était fidèle.
+
+Deux défauts de la simulation elle-même ont été corrigés, et le second est le
+plus sérieux des deux :
+
+**La liste des orphelins était fausse, et dangereuse.** Elle comparait
+`site-public/` à *toute* la racine distante. Comme ce dossier ne contient que
+les pages publiques, tout le reste du serveur paraissait orphelin : plus de
+mille entrées, dont `server.mjs`, `lib/`, `assets/`, `node_modules/`, `.env` et
+`data/leads.json` — les demandes des clients. Le tout présenté sous
+« décidez vous-même ». Qui aurait suivi cette liste aurait effacé le site et les
+demandes. La comparaison ne porte désormais que sur les surfaces réellement
+gérées, les pages publiques et les modules de `lib/` : **zéro orphelin**.
+
+**La comparaison se faisait par horodatage.** Un fichier de même taille mais de
+contenu différent était transféré *sans être signalé comme modifié* : on
+écrasait en croyant ne rien faire. C'est exactement le piège qui a dissimulé
+quatre jours durant que le dépôt était en retard sur la production. Les
+comparaisons et le déploiement se font maintenant par empreinte, et la
+simulation affiche d'abord un résumé en clair, parce que les codes de rsync ne
+se lisent pas sans mode d'emploi.
+
+Un défaut d'affichage trouvé au passage : le panneau « Synchro CRM » portait la
+classe `page-head`, que la feuille de style ne définit pas. Les autres panneaux
+emploient `main__head`. Corrigé. `admin.html` et `admin.css` sont par ailleurs
+identiques entre le dépôt et la production, et le panneau ne réutilise que des
+classes existantes — aucune feuille de style à déployer.
+
 **L'ordre retenu**, chaque étape étant réversible :
 
 1. nginx : ajouter les refus manquants, recharger, vérifier que

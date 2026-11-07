@@ -815,16 +815,20 @@ function renderCrmOutboxPanel(panel) {
     : state.crmSyncConfigured
       ? "Envoi vers le CRM désactivé. Les demandes restent en file, aucune n’est perdue."
       : "Aucun envoi vers le CRM : la liaison n’est pas encore configurée. Les demandes restent en file.";
+  // `main__head` et non `page-head` : c'est la classe que portent les autres
+  // panneaux, et la seule des deux que la feuille de style définisse.
   panel.innerHTML = `
-    <header class="page-head">
+    <div class="main__head">
       <div>
         <h1>Synchronisation CRM</h1>
         <p>${escapeHtml(syncNotice)}</p>
       </div>
-      <button type="button" class="btn btn--ghost" id="refresh-sync" ${state.crmJobsLoading ? "disabled" : ""}>
-        ${state.crmJobsLoading ? "Chargement…" : "Actualiser"}
-      </button>
-    </header>
+      <div class="actions-bar">
+        <button type="button" class="btn btn--ghost" id="refresh-sync" ${state.crmJobsLoading ? "disabled" : ""}>
+          ${state.crmJobsLoading ? "Chargement…" : "Actualiser"}
+        </button>
+      </div>
+    </div>
     <p class="compliance-disclaimer">${retryable ? `${retryable} tâche${retryable > 1 ? "s" : ""} à reprendre.` : "Les nouvelles demandes restent d’abord enregistrées sur le site."}</p>
     <div class="leads-list" id="sync-list"></div>
   `;
