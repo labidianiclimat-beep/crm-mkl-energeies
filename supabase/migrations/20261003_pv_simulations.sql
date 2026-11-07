@@ -1,5 +1,6 @@
 -- Simulations de production photovoltaïque, même accès que les études thermiques.
--- À coller dans Supabase. Tant que la table n’existe pas, le CRM enregistre dans crm_state.
+-- Appliquée en production le 7 novembre 2026 à 19 h 19 UTC. Avant cela, le CRM
+-- enregistrait ces simulations dans crm_state, faute de table.
 
 create table if not exists public.pv_simulations (
   organization_id uuid not null,

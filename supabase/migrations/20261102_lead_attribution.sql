@@ -17,7 +17,13 @@
 -- Aucune reprise de données n'est faite ici : les prospects existants gardent
 -- `origin_category` à NULL et leur colonne `source` intacte.
 --
--- NON APPLIQUÉE.
+-- Appliquée en production le 7 novembre 2026 à 19 h 24 UTC. Contrôlé juste
+-- après : les 246 prospects existants ont tous `origin_category` à NULL, donc
+-- aucune origine n'a été écrite. Contrôlé juste avant, parce que le déclencheur
+-- `commercial_opportunities_source_guard` refuse certaines valeurs de `source` :
+-- aucune des sept valeurs présentes n'est refusée, et « Prospection », portée
+-- par trente-trois prospects dont un créé le jour même, ne passe que grâce à la
+-- comparaison exacte — c'est bien la casse qui la sépare du code brut.
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------

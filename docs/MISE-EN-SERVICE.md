@@ -400,6 +400,25 @@ attribuait « Lecture » en croyant restreindre, il accorderait l'inverse.
 Quatre temps, dans cet ordre, et l'ordre n'est pas négociable. Le CRM est déjà
 déployé : il porte le code d'attribution, mais inerte, faute de trousseau.
 
+**Étape 1 faite le 7 novembre 2026, entre 19 h 19 et 19 h 26 UTC.** Les cinq
+migrations sont appliquées, une par une, avec un relevé entre chacune. Résultat
+final : **les 51 objets attendus sont présents** — 6 tables, 22 index,
+18 fonctions, 5 colonnes — et la production est passée de 79 à 85 tables et de
+31 à 49 fonctions. Les données n'ont pas bougé : 246 prospects, 4 212 clients,
+183 devis, 158 groupes, 275 articles, 23 profils, 4 comptes Google Calendar.
+**Aucune origine n'a été écrite** sur les 246 prospects existants. Le CRM a été
+éprouvé juste après : neuf contrôles sur neuf.
+
+Deux contrôles ont été faits avant d'appliquer, et ils valaient la peine. Le
+déclencheur `commercial_opportunities_source_guard` refuse certaines valeurs de
+`source` sur une table vivante : les sept valeurs présentes en production ont
+été relevées, aucune n'est refusée, et « Prospection » — trente-trois prospects,
+dont un créé le jour même — ne passe que grâce à la comparaison exacte. Par
+ailleurs, cinq endroits du code écrivent `source: "google"`, ce que ce même
+déclencheur interdit : vérification faite, aucun ne vise la colonne `source`
+d'un prospect. Quatre visent le champ `extra` d'un rendez-vous ou d'une autre
+entité, un la table `commercial_appointments`.
+
 **1. Les cinq migrations, sur la production.** Une seule contrainte d'ordre —
 `web_lead_ingest` crée les tables que `web_lead_idempotence` étend. L'ordre
 chronologique la respecte, et les trois autres sont indépendantes :

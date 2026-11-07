@@ -9,7 +9,9 @@
 -- SHA-256 est stockée ici : une lecture de cette table ne permet pas de
 -- rejouer un parcours d'autorisation.
 --
--- NON APPLIQUÉE. Aucune donnée existante n'est touchée par ce fichier.
+-- Appliquée en production le 7 novembre 2026 à 19 h 20 UTC. Aucune donnée
+-- existante n'a été touchée. Elle a rétabli les nouvelles connexions Google
+-- Calendar, que l'absence de cette table faisait refuser par un 503.
 -- ---------------------------------------------------------------------------
 
 create table if not exists public.google_oauth_states (

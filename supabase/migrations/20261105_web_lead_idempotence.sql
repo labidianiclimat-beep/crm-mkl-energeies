@@ -23,7 +23,9 @@
 -- brute, mais pas indéfiniment. Elle est signalée, puis effacée après un délai
 -- de grâce. L'historique du traitement, lui, reste.
 --
--- NON APPLIQUÉE.
+-- Appliquée en production le 7 novembre 2026 à 19 h 26 UTC, après avoir exécuté
+-- la vérification préalable décrite plus bas : zéro doublon, et même zéro fiche
+-- issue du site, l'attribution n'ayant jamais tourné.
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------

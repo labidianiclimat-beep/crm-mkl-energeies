@@ -20,7 +20,8 @@
 -- Dépend d'un identifiant de soumission stable et unique côté OVH, à vérifier
 -- dans `server.mjs` avant application.
 --
--- NON APPLIQUÉE.
+-- Appliquée en production le 7 novembre 2026 à 19 h 21 UTC. La file reste vide
+-- tant que le trousseau n'est pas posé : aucune demande ne peut y entrer.
 -- ---------------------------------------------------------------------------
 
 create table if not exists public.web_lead_submissions (
