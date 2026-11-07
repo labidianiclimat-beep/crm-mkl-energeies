@@ -26,3 +26,6 @@ tmp
 # scripts/recette/construire-schema.mjs. Il recopierait 2,6 Mo de contenu
 # déjà présent dans supabase/migrations/.
 scripts/recette/schema-recette.sql
+
+# Lots du socle de recette : assemblés par scripts/recette/decouper-socle.mjs.
+scripts/recette/lots/
