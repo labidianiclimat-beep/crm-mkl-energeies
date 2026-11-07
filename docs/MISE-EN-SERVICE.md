@@ -231,6 +231,46 @@ retirer `CRM_SYNC_ENABLED` de l'environnement du service et de le relancer : le
 site continue d'enregistrer les demandes, il cesse seulement de les transmettre.
 Aucune demande n'est perdue, la file les conserve.
 
+## 3 bis. Sauvegarder la branche sur GitHub
+
+Le travail du catalogue, des devis et du module marketing n'existait dans aucun
+commit jusqu'au 7 novembre au soir, alors qu'il était **déjà en production** :
+le déploiement de 15 h 40 a été fait depuis l'arbre de travail, avec la mention
+`gitDirty`. Un déploiement ultérieur lancé depuis une copie propre du dépôt
+aurait donc effacé ces corrections sans que rien ne le signale. Les deux commits
+`0f1fc9c` et `a7240df` y ont mis fin.
+
+Reste que la branche ne vit que sur un seul poste. La pousser la met à l'abri,
+mais il faut savoir ce que cela déclenche.
+
+**Un push crée un déploiement, par défaut.** Le projet Vercel est relié au dépôt
+GitHub, et Vercel compile toute branche poussée en Preview, sans rien demander.
+Ce n'est pas la production — la branche de production est `main`, et elle reste
+intacte — mais c'est bien un déploiement, avec les variables de recette. D'où
+l'entrée ajoutée à `vercel.json`, que le format JSON ne permet pas de
+commenter sur place :
+
+```json
+"git": { "deploymentEnabled": { "etat-reference-20261105": false } }
+```
+
+Les branches non listées gardent le comportement par défaut : `main` continue
+donc de déployer la production normalement. Le réglage est lu dans le commit
+poussé, et vaut aussi pour les pushes suivants sur cette branche.
+
+```sh
+# Sauvegarde sur une branche neuve. « main » n'est pas touché, et aucune
+# fusion n'est demandée : c'est une copie de sûreté, pas une intégration.
+git push -u origin etat-reference-20261105
+```
+
+Avant de pousser, deux contrôles ont été faits sur les 38 commits concernés :
+aucun n'ajoute de secret — les seules correspondances sont des exemples fictifs
+dans les tests et des fragments de brochure en base64 qui ressemblent à des
+jetons sans en être — et `.env.example`, le seul fichier d'environnement de
+l'archive, ne contient que des valeurs d'exemple, présentes sur `main` depuis
+juillet.
+
 ## 4. Tests finaux
 
 Dans cet ordre, du moins coûteux au plus engageant.

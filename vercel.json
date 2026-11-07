@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "buildCommand": "npm run build:vercel",
+  "git": {
+    "deploymentEnabled": {
+      "etat-reference-20261105": false
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/web-leads",
