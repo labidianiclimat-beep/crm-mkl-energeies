@@ -603,6 +603,58 @@ interrupteur coupé), `--retour`.
 Les contrôles passent déjà, sauf celui qui doit échouer : il signale
 l'exposition de `/deploy/`. Rien ne sera déployé tant qu'elle dure.
 
+#### La simulation a trouvé pire que la disposition : le dépôt est en retard
+
+**Trois fichiers du dépôt sont d'une génération ANTÉRIEURE à la production.**
+Mesuré le 7 novembre : déployer `server.mjs` tel quel **supprimerait 272 lignes
+vivantes**, pour 214 ajoutées. Et pas n'importe lesquelles :
+
+- la route `POST /api/admin/forgot-password` et son gestionnaire
+  `handleAdminForgotPassword`, soit le courriel de réinitialisation ;
+- la route `POST /api/admin/change-password` et `handleAdminChangePassword` ;
+- `destroyAllSessions()`, appelée deux fois, qui ferme toutes les sessions
+  d'administration lors d'un changement de mot de passe ;
+- les utilitaires `writeJsonArray` et `safePath`.
+
+`admin.js` perdrait 159 lignes — l'interface correspondante — et
+`lib/admin-auth.mjs` les cinq lignes de `destroyAllSessions`.
+
+**L'explication tient aux noms des deux sauvegardes trouvées plus haut.**
+`env-before-pwd-20261103` et `env-before-pw-20261104` : la gestion du mot de
+passe a été déployée directement sur le serveur les 3 et 4 novembre, et **n'est
+jamais revenue au dépôt**. Le `site-public/` a été reconstitué le 5 novembre par
+HTTPS, ce qui a bien rapatrié les pages — identiques à l'octet — mais pas
+`server.mjs`, `admin.js` ni `admin-auth.mjs`, qui ne sont pas téléchargeables.
+
+Déployer en l'état aurait donc effacé une fonctionnalité d'administration et
+une protection de sécurité, en silence. Le dépôt et la production sont chacun
+cohérents — ni l'un ni l'autre n'aurait planté au démarrage — ce qui rendait la
+régression d'autant plus difficile à voir.
+
+**Le contrôle est désormais automatique.** `--controles` compare les trois
+fichiers à ceux en service et **refuse tout déploiement qui retirerait des
+lignes**. Il échoue aujourd'hui, comme il doit :
+
+```
+✗ server.mjs n efface rien en production         272 lignes seraient PERDUES
+✗ admin.js n efface rien en production           159 lignes seraient PERDUES
+✗ lib/admin-auth.mjs n efface rien en production   5 lignes seraient PERDUES
+```
+
+**La bonne nouvelle, vérifiée :** le hachage du mot de passe est **identique**
+de part et d'autre — `scrypt`, même format en six parties, même `SCRYPT_KEYLEN`
+à 64, même appel. La rotation des secrets et le déploiement sont donc
+indépendants, et l'ordre entre eux est libre.
+
+Autre point relevé : `site-public/LISEZ-MOI.md` serait déployé dans la racine
+web et **servi publiquement** — aucun refus nginx ne le couvre, seul `README.md`
+est nommé. C'est une note de travail interne. Il est désormais exclu du
+déploiement.
+
+**Ce qu'il faut faire avant de reprendre l'étape 3 :** rapatrier au dépôt les
+trois fichiers en service, puis y reporter les 214 lignes d'attribution. Alors
+seulement le contrôle passera, et le déploiement n'effacera plus rien.
+
 **L'ordre retenu**, chaque étape étant réversible :
 
 1. nginx : ajouter les refus manquants, recharger, vérifier que

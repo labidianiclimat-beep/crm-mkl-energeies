@@ -96,6 +96,43 @@ controles() {
     ok "interrupteur coupé pour ce passage"
   fi
 
+  # Le contrôle le plus important, et celui qui a servi. Le dépôt n'est pas
+  # seulement d'une disposition différente : pour trois fichiers, il est d'une
+  # génération ANTÉRIEURE à la production. Relevé le 7 novembre 2026 :
+  # `server.mjs` du dépôt supprimerait 272 lignes vivantes, dont les routes
+  # `/api/admin/forgot-password` et `/api/admin/change-password`, leurs deux
+  # gestionnaires, `destroyAllSessions` et le courriel de réinitialisation.
+  # `admin.js` en perdrait 159. Ces fonctionnalités ont été déployées
+  # directement sur le serveur les 3 et 4 novembre et ne sont jamais revenues
+  # au dépôt. Les écraser serait une régression de sécurité silencieuse.
+  #
+  # Le contrôle compare donc fichier par fichier et refuse tout déploiement
+  # qui retirerait des lignes. Il demande un accès SSH en lecture seule.
+  TEMPO=$(mktemp -d)
+  PERTES=0
+  for COUPLE in "server.mjs:server.mjs" "admin.js:admin.js" "lib/admin-auth.mjs:lib/admin-auth.mjs"; do
+    LOCAL="${COUPLE%%:*}"
+    REMOTE="${COUPLE##*:}"
+    if scp -q -o BatchMode=yes -o IdentitiesOnly=yes ${CLE:+-i "$CLE"} \
+         "$HOTE:$DISTANT/$REMOTE" "$TEMPO/ref" 2>/dev/null; then
+      RETIREES=$(diff "$TEMPO/ref" "$RACINE/$LOCAL" 2>/dev/null | grep -c '^<' || true)
+      if [ "${RETIREES:-0}" -gt 0 ]; then
+        nok "$LOCAL n efface rien en production" "$RETIREES lignes seraient PERDUES"
+        PERTES=$((PERTES + 1))
+      else
+        ok "$LOCAL n efface rien en production"
+      fi
+    else
+      nok "$LOCAL comparé à la production" "lecture impossible"
+    fi
+  done
+  rm -rf "$TEMPO"
+  if [ "$PERTES" -gt 0 ]; then
+    printf '\n  Le dépôt est, pour ces fichiers, antérieur à la production.\n'
+    printf '  Il faut d abord y rapatrier les versions en service, puis y\n'
+    printf '  reporter l attribution. Déployer en l état perdrait du travail.\n'
+  fi
+
   echo
   [ "$ANOMALIE" = "0" ] || { printf '  Un contrôle a échoué. Rien ne sera déployé.\n\n'; return 1; }
   printf '  Contrôles réunis.\n\n'
@@ -108,7 +145,7 @@ controles() {
 simuler() {
   echo_titre "Simulation — aucune écriture"
   printf '  Pages publiques, de site-public/ vers la racine distante :\n'
-  rsync -naiz --no-perms --omit-dir-times -e "$SSH" \
+  rsync -naiz --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
     "$RACINE/site-public/" "$HOTE:$DISTANT/" | sed 's/^/    /'
 
   printf '\n  Serveur et bibliothèques :\n'
@@ -147,7 +184,11 @@ deployer() {
   $SSH "$HOTE" "sudo cp -a '$DISTANT' '$SAUVEGARDE' && sudo test -f '$SAUVEGARDE/index.html' && echo '    copie faite'"
 
   printf '\n  Envoi des pages publiques…\n'
-  rsync -az --no-perms --omit-dir-times -e "$SSH" "$RACINE/site-public/" "$HOTE:$DISTANT/"
+  # LISEZ-MOI.md est une note de travail expliquant pourquoi ce dossier
+  # existe. Déployée, elle serait servie publiquement : aucun refus nginx ne
+  # la couvre, seul « README.md » est nommé.
+  rsync -az --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
+    "$RACINE/site-public/" "$HOTE:$DISTANT/"
 
   printf '  Envoi du serveur et des bibliothèques…\n'
   # shellcheck disable=SC2086
