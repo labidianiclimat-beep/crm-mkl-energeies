@@ -78,25 +78,43 @@ const CAS = [
   {
     cle: "google_ads",
     titre: "Google Ads",
+    // mirrorSourceLabel colle le sous-type au libellé de catégorie. Sans
+    // sous-type, Google Ads n'en a pas, le libellé reste nu.
     libelle: "Prospect GG Ads",
-    preuve: "gclid",
-    champs: { gclid: "essai-gclid-fictif-001", utm_source: "google", utm_medium: "cpc", utm_campaign: "PAC hiver" },
+    categorie: "google_ads",
+    // Un seul contact : la première visite est aussi celle de la demande.
+    // `touch_role` reste alors vide, et non « premier ».
+    attributions: "unique|gclid",
+    attribution: {
+      gclid: "essai-gclid-fictif-001",
+      utm_source: "google", utm_medium: "cpc", utm_campaign: "PAC hiver",
+      landingPath: "/pompe-a-chaleur", referrerHost: "www.google.com",
+    },
     contact: { name: "Dupont Fictif", email: "essai-google@exemple.test", phone: "0600000001" },
   },
   {
     cle: "meta_ads",
     titre: "Facebook",
-    libelle: "Prospect Face",
-    preuve: "fbclid",
-    champs: { fbclid: "essai-fbclid-fictif-002", utm_source: "facebook", utm_medium: "paid_social", utm_campaign: "PV automne" },
+    libelle: "Prospect Face · Facebook",
+    categorie: "meta_ads",
+    // Deux contacts distincts : venu d'abord par un site référent, revenu
+    // par une annonce. C'est le cas qui met les deux modèles en regard.
+    attributions: "premier|referrer,dernier|fbclid",
+    attribution: {
+      fbclid: "essai-fbclid-fictif-002",
+      utm_source: "facebook", utm_medium: "paid_social", utm_campaign: "PV automne",
+      landingPath: "/photovoltaique", referrerHost: "l.facebook.com",
+    },
+    attributionFirst: { referrerHost: "www.bing.com", landingPath: "/" },
     contact: { name: "Martin Fictif", email: "essai-facebook@exemple.test", phone: "0600000002" },
   },
   {
     cle: "site_web",
     titre: "Site Internet",
-    libelle: "Prospect Site",
-    preuve: "referrer",
-    champs: { referrer: "https://www.google.com/search" },
+    libelle: "Prospect Site · Site référent",
+    categorie: "site_web",
+    attributions: "unique|referrer",
+    attribution: { referrerHost: "www.google.com", landingPath: "/climatisation" },
     contact: { name: "Bernard Fictif", email: "essai-site@exemple.test", phone: "0600000003" },
   },
 ];
@@ -449,13 +467,18 @@ if (!(await attendreServeur())) {
 const chemin = "/api/web-leads";
 const soumissions = new Map();
 
+// Les marqueurs publicitaires ne sont pas lus à la racine de la charge :
+// l'ingestion ne retient que les objets `attribution`, pour le contact
+// courant, et `attributionFirst`, pour celui mémorisé par le navigateur lors
+// de la première visite.
 function corpsDe(cas) {
   return JSON.stringify({
     submissionId: soumissions.get(cas.cle),
     kind: "lead",
     ...cas.contact,
-    ...cas.champs,
     message: `Demande d'essai ${cas.titre}, donnees fictives.`,
+    attribution: cas.attribution,
+    ...(cas.attributionFirst ? { attributionFirst: cas.attributionFirst } : {}),
   });
 }
 
@@ -539,13 +562,18 @@ if (mode === "complet") {
     const [libelle, categorie, , statut] = fiche;
 
     noter(`${cas.titre} — libellé affiché`, cas.libelle, libelle);
-    noter(`${cas.titre} — origine enregistrée`, cas.cle, categorie);
+    noter(`${cas.titre} — origine enregistrée`, cas.categorie, categorie);
     noter(`${cas.titre} — demande clôturée`, "done", statut);
 
     // 3. Attribution : premier contact, avec la preuve attendue.
-    const attribution = sql(`select coalesce(string_agg(touch_role || '|' || evidence, ','), 'aucune')
+    // `touch_role` est vide quand il n'y a qu'un contact : il est rendu ici
+    // « unique » pour que la ligne reste lisible.
+    const attribution = sql(`select coalesce(string_agg(
+          coalesce(nullif(touch_role, ''), 'unique') || '|' || evidence, ','
+          order by case touch_role when 'premier' then 0 when 'dernier' then 1 else 2 end
+        ), 'aucune')
         from public.lead_attribution where submission_id = '${soumission}'`);
-    noter(`${cas.titre} — attribution du premier contact`, `premier|${cas.preuve}`, attribution);
+    noter(`${cas.titre} — attribution enregistrée`, cas.attributions, attribution);
 
     // 4. Relance du site : même demande, signature neuve. La file doit la
     //    reconnaître et ne rien recréer.
@@ -559,7 +587,8 @@ if (mode === "complet") {
         (select count(*) from public.commercial_opportunities
            where extra->'webLead'->>'submissionId' = '${soumission}') || '/' ||
         (select count(*) from public.lead_attribution where submission_id = '${soumission}')`);
-    noter(`${cas.titre} — aucun doublon après relance`, "1/1/1", unicite,
+    noter(`${cas.titre} — aucun doublon après relance`,
+      `1/1/${cas.attributions.split(",").length}`, unicite,
       "demandes / fiches / attributions");
   }
 

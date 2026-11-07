@@ -28,13 +28,22 @@ esac
 printf '\n  Compilation avec la configuration de RECETTE\n'
 printf '  Adresse gravée : %s\n\n' "$MKL_RECETTE_URL"
 
+# npm n'est pas toujours sur le PATH de cette machine. Le binaire de Next est
+# appelé directement, avec l'interpréteur qui fait tourner le reste.
+NODE="${MKL_NODE:-/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node}"
+if command -v npm >/dev/null 2>&1; then
+  COMPILER="npm run build"
+else
+  COMPILER="$NODE node_modules/next/dist/bin/next build"
+fi
+
 rm -rf .next
 NEXT_PUBLIC_SUPABASE_URL="$MKL_RECETTE_URL" \
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="${MKL_RECETTE_PUBLISHABLE_KEY:-non-requis-cote-serveur}" \
 SUPABASE_SERVICE_ROLE_KEY="$MKL_RECETTE_SERVICE_KEY" \
 SUPABASE_PRODUCTION_REF="$REF_PRODUCTION" \
 WEB_LEAD_ORGANIZATION_ID="$MKL_RECETTE_ORGANIZATION_ID" \
-  npm run build
+  $COMPILER
 
 printf '\n  Vérification de ce qui a été gravé :\n'
 if grep -rql "$REF_PRODUCTION" .next/server --include='*.js' 2>/dev/null; then
