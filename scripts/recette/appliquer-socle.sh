@@ -56,18 +56,31 @@ ecrire() { PGPASSWORD="$MKL_RECETTE_MDP" "$PSQL" "$URL" -v ON_ERROR_STOP=1 -q -f
 # Supabase, et le pooler présente `current_user` comme « postgres » des deux
 # côtés : il faut donc un critère portant sur le contenu.
 #
-# La production héberge une organisation ; la recette n en aura jamais, car
-# nous n y appliquons que du schéma, sans la moindre donnée métier. Ce critère
-# reste donc valable avant le premier lot comme après le dernier, et il se
-# déclencherait si l accès enregistré pointait un jour vers la production.
+# Le critère retenu est la table `crm_files`. Elle existe en production, où
+# elle a été créée à la main depuis le tableau de bord, et **aucune migration
+# du dépôt ne la crée** : elle ne peut donc jamais apparaître sur la recette,
+# à aucune étape de l installation. C est une empreinte structurelle propre à
+# la production, stable du premier lot au dernier.
+#
+# Le nombre d organisations ne convient pas : `organizations_seed` en insère
+# une sur la recette dès le premier lot, et la production en compte également
+# une. Ce critère bloquait donc la recette elle-même après `socle_01`.
+#
+# S y ajoute un critère de données : la production héberge des clients, la
+# recette n en recevra aucun puisque nous n appliquons que de la structure.
 garde_cible() {
-  presente="$(q "select count(*) from pg_tables
-                   where schemaname = 'public' and tablename = 'organizations'")"
-  if [ "$presente" = "1" ]; then
-    lignes="$(q "select count(*) from public.organizations")"
-    if [ "$lignes" != "0" ]; then
-      non "la base atteinte contient $lignes organisation(s) : ce sont des"
-      printf '    données métier, donc la PRODUCTION. Arrêt immédiat, aucune écriture.\n\n'
+  if [ "$(q "select count(*) from pg_tables
+               where schemaname = 'public' and tablename = 'crm_files'")" != "0" ]; then
+    non "la table crm_files est présente : empreinte de la PRODUCTION"
+    printf '    Aucune migration du dépôt ne la crée. Arrêt immédiat, aucune écriture.\n\n'
+    exit 1
+  fi
+  if [ "$(q "select count(*) from pg_tables
+               where schemaname = 'public' and tablename = 'clients'")" = "1" ]; then
+    clients="$(q "select count(*) from public.clients")"
+    if [ "$clients" != "0" ]; then
+      non "la base atteinte contient $clients client(s) : ce sont des données"
+      printf '    métier, donc la PRODUCTION. Arrêt immédiat, aucune écriture.\n\n'
       exit 1
     fi
   fi
