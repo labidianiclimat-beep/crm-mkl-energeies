@@ -114,9 +114,14 @@ poser() {
   # l'environnement visé : annoncer une pose qui n'a pas eu lieu est pire
   # qu'un échec, puisque personne ne va vérifier. La présence est donc
   # relue, et c'est elle qui décide.
-  if ! printf '%s' "$2" | vercel env add "$1" "$CIBLE" >/dev/null 2>&1; then
-    arret "$1 existe déjà sur $CIBLE. Retirez-la d'abord : vercel env rm $1 $CIBLE"
-  fi
+  # La sortie du client était masquée par précaution. C'était une précaution
+  # mal placée : le client n'imprime jamais la valeur, et la masquer nous a
+  # privés du seul message capable d'expliquer un refus. Elle est donc
+  # conservée, puis purgée par sécurité de toute occurrence de la valeur
+  # avant d'être montrée.
+  RAPPORT="$(printf '%s' "$2" | vercel env add "$1" "$CIBLE" 2>&1 || true)"
+  RAPPORT="$(printf '%s' "$RAPPORT" | sed "s|$2|«valeur masquée»|g")"
+  printf '%s\n' "$RAPPORT" | sed -n 's/^/    /p'
   # La propagation n'est pas instantanée côté Vercel : quelques essais
   # espacés valent mieux qu'un verdict rendu trop tôt.
   ESSAI=0
@@ -128,7 +133,11 @@ poser() {
     ESSAI=$((ESSAI + 1))
     sleep 2
   done
-  arret "$1 n'apparaît pas sur $CIBLE alors que le client a signalé un succès. Rien ne doit être tenu pour posé : reprenez l'opération."
+  printf '\n  %s n apparaît pas sur %s. Rien ne doit être tenu pour posé.\n' "$1" "$CIBLE" >&2
+  printf '  Le message du client, ci-dessus, dit pourquoi. Si la variable existe\n' >&2
+  printf '  déjà sur un autre environnement, il faut la poser depuis le tableau\n' >&2
+  printf '  de bord Vercel, qui sait rattacher un nom à plusieurs environnements.\n' >&2
+  arret "Opération interrompue. Aucun environnement n'a été modifié de façon utile."
 }
 
 # ---------------------------------------------------------------------------
