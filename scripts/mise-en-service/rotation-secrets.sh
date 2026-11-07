@@ -4,6 +4,7 @@
 #   sh scripts/mise-en-service/rotation-secrets.sh --etat
 #   sh scripts/mise-en-service/rotation-secrets.sh --pin-ouvrir     [--production]
 #   sh scripts/mise-en-service/rotation-secrets.sh --pin-refermer   [--production]
+#   sh scripts/mise-en-service/rotation-secrets.sh --solar-eprouver
 #   sh scripts/mise-en-service/rotation-secrets.sh --solar          [--production]
 #
 # Le principe, en deux temps. « --pin-ouvrir » publie le nouveau code tout en
@@ -30,13 +31,29 @@ arret() { printf '\n  %s\n\n' "$1" >&2; exit 2; }
 for ARG in "$@"; do
   case "$ARG" in
     --production) CIBLE="production" ;;
-    --etat|--pin-ouvrir|--pin-refermer|--solar) ACTION="$ARG" ;;
+    --etat|--pin-ouvrir|--pin-refermer|--solar|--solar-eprouver) ACTION="$ARG" ;;
     *) arret "Argument inconnu : $ARG" ;;
   esac
 done
-[ -n "$ACTION" ] || arret "Indiquez --etat, --pin-ouvrir, --pin-refermer ou --solar."
+[ -n "$ACTION" ] || arret "Indiquez --etat, --pin-ouvrir, --pin-refermer, --solar-eprouver ou --solar."
 
-command -v vercel >/dev/null 2>&1 || arret "La commande « vercel » est introuvable."
+# L'épreuve n'écrit nulle part : exiger le client Vercel la rendrait
+# dépendante d'un outil qu'elle n'utilise pas, et « --production » n'y aurait
+# aucun sens puisqu'elle ne touche à aucun environnement.
+if [ "$ACTION" = "--solar-eprouver" ]; then
+  [ "$CIBLE" = "preview" ] \
+    || arret "« --solar-eprouver » ne touche à aucun environnement : retirez --production."
+else
+  command -v vercel >/dev/null 2>&1 || arret "La commande « vercel » est introuvable."
+fi
+
+# Empreinte, jamais la clé. Elle sert à vérifier plus tard que la valeur
+# publiée est bien celle qui a été éprouvée, sans conserver le secret.
+EMPREINTES="$HOME/.mkl-secrets/solar-empreinte"
+
+empreinte_de() {
+  printf '%s' "$1" | shasum -a 256 | cut -c1-16
+}
 
 demander() {
   # $1 = intitulé. La valeur est rendue sur la sortie standard, jamais à l'écran.
@@ -81,12 +98,37 @@ eprouver_solar() {
   done
 }
 
+presente() {
+  # $1 = nom. Le tableau de « vercel env ls » part à la fois sur la sortie
+  # standard et sur celle d'erreur : les deux sont lues, sinon la réponse
+  # dépendrait d'un détail d'implémentation du client.
+  vercel env ls "$CIBLE" 2>&1 | grep -q "^[[:space:]]*$1[[:space:]]"
+}
+
 poser() {
   # $1 = nom, $2 = valeur. Sans --force : une entrée existante n'est jamais
   # écrasée par accident, il faut la retirer d'abord et le voir.
-  printf '%s' "$2" | vercel env add "$1" "$CIBLE" >/dev/null 2>&1 \
-    && printf '  ✓ %s posée sur %s\n' "$1" "$CIBLE" \
-    || arret "$1 existe déjà sur $CIBLE. Retirez-la d'abord : vercel env rm $1 $CIBLE"
+  #
+  # Le code de sortie du client ne suffit pas à conclure. Un essai a déjà
+  # rapporté un succès pour une variable qui ne s'est jamais trouvée dans
+  # l'environnement visé : annoncer une pose qui n'a pas eu lieu est pire
+  # qu'un échec, puisque personne ne va vérifier. La présence est donc
+  # relue, et c'est elle qui décide.
+  if ! printf '%s' "$2" | vercel env add "$1" "$CIBLE" >/dev/null 2>&1; then
+    arret "$1 existe déjà sur $CIBLE. Retirez-la d'abord : vercel env rm $1 $CIBLE"
+  fi
+  # La propagation n'est pas instantanée côté Vercel : quelques essais
+  # espacés valent mieux qu'un verdict rendu trop tôt.
+  ESSAI=0
+  while [ "$ESSAI" -lt 6 ]; do
+    if presente "$1"; then
+      printf '  ✓ %s posée sur %s, et relue sur place\n' "$1" "$CIBLE"
+      return 0
+    fi
+    ESSAI=$((ESSAI + 1))
+    sleep 2
+  done
+  arret "$1 n'apparaît pas sur $CIBLE alors que le client a signalé un succès. Rien ne doit être tenu pour posé : reprenez l'opération."
 }
 
 # ---------------------------------------------------------------------------
@@ -96,7 +138,8 @@ case "$ACTION" in
 --etat)
   printf '\n  État du renouvellement — %s\n' "$CIBLE"
   printf '  ─────────────────────────────────────\n'
-  LISTE="$(vercel env ls "$CIBLE" 2>/dev/null || true)"
+  # Les deux flux, pour la raison dite dans « presente ».
+  LISTE="$(vercel env ls "$CIBLE" 2>&1 || true)"
   for NOM in CRM_ACCESS_PIN CRM_ACCESS_PIN_PRECEDENT CRM_SESSION_SECRET \
              CRM_SESSION_SECRET_PRECEDENT GOOGLE_SOLAR_API_KEY; do
     if printf '%s' "$LISTE" | grep -q "^[[:space:]]*$NOM[[:space:]]"; then
@@ -153,6 +196,36 @@ case "$ACTION" in
   printf '\n  Effectif au prochain déploiement.\n\n'
   ;;
 
+--solar-eprouver)
+  printf '\n  Épreuve de la nouvelle clé Google Solar\n'
+  printf '  ──────────────────────────────────────\n'
+  printf '  Cette étape ne touche à rien : ni Vercel, ni la production, ni le\n'
+  printf '  CRM. Elle interroge seulement Google pour savoir si la clé répond.\n\n'
+
+  CLE="$(demander 'Nouvelle clé Google Solar')"
+  [ "${#CLE}" -ge 20 ] || arret "La clé semble trop courte."
+  case "$CLE" in
+    *[!A-Za-z0-9_-]*) arret "La clé contient un caractère inattendu : ligne copiée en trop ?" ;;
+  esac
+
+  printf '  Interrogation des deux points d entrée utilisés par le CRM :\n'
+  eprouver_solar "$CLE"
+
+  # Seule l'empreinte est conservée. Au moment de publier, la clé sera saisie
+  # de nouveau : les rapprocher écarte la faute de copie qui ferait publier
+  # une valeur voisine de celle qui vient d'être éprouvée.
+  mkdir -p "$(dirname "$EMPREINTES")"
+  umask 077
+  empreinte_de "$CLE" > "$EMPREINTES"
+  chmod 600 "$EMPREINTES"
+
+  printf '\n  La clé fonctionne, et elle est bien restreinte à l API Solar.\n'
+  printf '  Rien n a été publié. Aucune clé n a été enregistrée : seule une\n'
+  printf '  empreinte de contrôle, dans %s\n' "$EMPREINTES"
+  printf '\n  Étape suivante, avec votre accord :\n'
+  printf '    sh scripts/mise-en-service/rotation-secrets.sh --solar --production\n\n'
+  ;;
+
 --solar)
   printf '\n  Renouvellement de la clé Google Solar\n'
   printf '  ────────────────────────────────────\n'
@@ -167,6 +240,16 @@ case "$ACTION" in
     *[!A-Za-z0-9_-]*) arret "La clé contient un caractère inattendu : ligne copiée en trop ?" ;;
   esac
 
+  if [ -r "$EMPREINTES" ]; then
+    if [ "$(empreinte_de "$CLE")" = "$(cat "$EMPREINTES")" ]; then
+      printf '  ✓ c est bien la clé déjà éprouvée\n'
+    else
+      arret "Cette clé n est pas celle qui a été éprouvée. Reprenez --solar-eprouver plutôt que de publier une valeur inconnue."
+    fi
+  else
+    printf '  (aucune épreuve préalable enregistrée : la clé va être éprouvée maintenant)\n'
+  fi
+
   printf '\n  Vérification de la clé auprès de Google, avant toute publication :\n'
   eprouver_solar "$CLE"
 
@@ -174,6 +257,17 @@ case "$ACTION" in
   vercel env rm GOOGLE_SOLAR_API_KEY "$CIBLE" --yes >/dev/null 2>&1 || true
   poser GOOGLE_SOLAR_API_KEY "$CLE"
 
+  # L'empreinte ne disparaît qu'une fois la production servie. La retirer dès
+  # la recette obligerait à publier en production sans ce rapprochement, c'est
+  # à dire à l'endroit où il est le plus utile.
+  if [ "$CIBLE" = "production" ]; then
+    rm -f "$EMPREINTES"
+  else
+    printf '  (empreinte conservée pour l étape de production)\n'
+  fi
+
+  printf '\n  Le CRM en ligne continue d utiliser l ancienne clé : une variable\n'
+  printf '  ne prend effet qu au déploiement suivant. Rien n est interrompu.\n'
   printf '\n  Ne supprimez l ancienne clé dans Google Cloud qu APRÈS avoir vérifié\n'
   printf '  le calcul de production photovoltaïque sur le déploiement.\n\n'
   ;;
