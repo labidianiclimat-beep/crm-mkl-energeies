@@ -214,6 +214,58 @@ ce cas — valeur déjà admise par la contrainte en base, donc sans migration.
 La Preview déployée exécute encore l'ancien code : le banc d'essai lit `utm` et
 signale l'écart. Il redeviendra vert au prochain déploiement de recette.
 
+### Les quatre blocages levés le 7 novembre au soir
+
+**Les cinq essais en échec.** Un seul accusait le code, et c'est le plus
+gênant : `profileToUiUser` renvoyait le rôle brut de la base, alors que les
+routes comparent `normalizeRoleLabel(profile.role)` à « Superadmin ». Un compte
+enregistré « Admin second » obtenait donc ses droits du serveur mais les perdait
+à l'écran. Les quatre autres étaient des assertions de texte devenues fausses
+après des changements volontaires, vérifiés un par un. Deux détails méritent
+d'être retenus : la variable `home` n'était pas définie dans l'essai
+d'installation, et deux assertions ne tournaient donc jamais ; et dans l'essai
+de recherche client, trois assertions tombaient pour un seul motif, dont deux
+restaient cachées derrière la première. **1149 essais sur 1149.**
+
+**Les migrations de production.** La production n'a pas d'historique de
+migrations tenu par un outil : son schéma a été posé à la main. Rejouer les
+soixante-quinze fichiers y échouerait partout sur des « already exists ».
+`scripts/mise-en-service/preparer-migrations-production.mjs` ne devine donc
+rien : il classe, et produit une requête d'inventaire en lecture seule.
+
+| Genre | Nombre | Ce que cela veut dire |
+|---|---|---|
+| automatique | 63 | de vraies migrations, à appliquer |
+| conditionnel | 8 | s'arrêtent si une donnée du catalogue manque |
+| à écarter | 4 | deux retirées, une à confirmer à la main, **une réservée à la recette** |
+
+Ce dernier point mérite l'attention : `20261106_huawei_sun2000_previsualisation.sql`
+nomme le projet de recette comme seule cible autorisée. Lancer le dossier entier
+contre la production serait une faute, pas seulement une erreur.
+
+**La tâche de la minute.** Mesurée, pas supposée : quatre-vingt-dix passages en
+quatre-vingt-dix minutes, quatre-vingt-dix erreurs, toutes identiques — la
+fonction `reserve_web_leads` n'est pas installée en production. Rien n'était
+cassé pour autant, puisque sans trousseau aucune demande ne peut y entrer. Mais
+mille quatre cent quarante lignes d'erreur par jour ne signalent rien et
+noieraient la première vraie panne. Les deux passages planifiés s'arrêtent
+désormais sur `inerte`. **Contrôle de mise en service : la réponse doit dire
+`ok` sans `inerte` une fois la production configurée** — sinon la file serait
+silencieuse au lieu d'alerter.
+
+**La clé Google Solar.** Déclarée sur les deux environnements, en vigueur sur
+un seul.
+
+| | Posée le | Déploiement qui la porte |
+|---|---|---|
+| Preview | 7 nov. 14 h 51 UTC | oui, les deux Preview de 14 h 57 et 16 h 20 |
+| Production | 7 nov. 16 h 31 UTC | **aucun** |
+
+Le déploiement qui sert la production date de 14 h 40 UTC, soit une heure
+cinquante avant la pose de la clé, et aucun déploiement n'a été créé depuis
+16 h 31. La production fonctionne donc encore avec l'ancienne clé — ce qui est
+la raison de ne pas l'effacer tout de suite.
+
 ### Retour arrière
 
 Le déploiement du site est un `rsync` : le retour arrière consiste à
