@@ -503,6 +503,65 @@ blanche du code. Deux causes possibles, et l'étape 3 doit traiter les deux : le
 fichier n'est pas encore sur le serveur, et la location exacte qui l'autorise
 manque à la configuration vivante.
 
+#### L'exposition était bien plus large que le script, et elle est refermée
+
+Corrigée en production le 7 novembre 2026 à 19 h 51 UTC, avec votre accord.
+
+**Ce qui était réellement exposé.** Pas deux fichiers, mais **soixante-cinq** :
+tout `/var/www/mkl-energies/deploy/`. Les scripts de déploiement, les fichiers
+d'unité systemd, une quinzaine de rapports internes — dont
+`FICHE-INCIDENT-RGPD.md`, `PROD-SECURITY-DEPLOY-REPORT.md` — les copies de
+sauvegarde du site, et surtout **deux fichiers `.env`**,
+`env-before-pwd-20261103T165848Z.env` et `env-before-pw-20261104T222527Z.env`,
+qui contiennent `SESSION_SECRET` et `ADMIN_PASSWORD_HASH`. Vérifié en ne lisant
+que les **noms** des variables, jamais les valeurs. Le dossier `scripts/` l'était
+aussi, dont `hash-admin-password.mjs` et `public-tunnel.sh`.
+
+**La cause n'était pas celle que je croyais d'abord.** Ce n'est pas que nginx
+servait `/deploy/` en statique : `location /` est bien un proxy vers Node. C'est
+que **`lib/public-static.mjs` est absent du serveur**. Tout le durcissement du
+code — la liste des refus, les listes blanches de `/lib/` et `/data/` — n'est
+pas déployé ; le `server.mjs` en service est une génération antérieure qui sert
+les fichiers lui-même. La seule protection vivante venait de nginx, dont la
+configuration portait des refus pour `/lib/`, `/data/`, `/server.mjs` et les
+fichiers cachés, mais **aucun pour `/deploy/`**. Les deux `.env` échappaient
+aussi au refus des fichiers cachés : leur nom *finit* par `.env`, il ne commence
+pas par un point.
+
+**Personne ne les a téléchargés.** Les journaux nginx couvrent du 23 octobre au
+7 novembre, soit **toute la durée de l'exposition** — `deploy/` a été créé le
+31 octobre, les deux `.env` le 1er puis le 4 novembre. Sur cette fenêtre
+complète, la seule adresse ayant obtenu un code 200 sur `/deploy/` ou
+`/scripts/` est `78.127.111.51`, votre propre réseau, avec nos outils
+(`curl`, `Python-urllib`) — mes sondes de ce soir à 19 h 50 y figurent, suivies
+des 404 de la vérification à 19 h 51. Six adresses extérieures ont bien cherché,
+mais seulement aux emplacements génériques `/deploy/.env` et `/scripts/.env`,
+qui n'ont jamais existé : `45.138.12.16`, `35.228.72.191`, `213.209.159.175`,
+`80.94.95.211`, `8.231.216.167`, `8.228.85.65`. Toutes ont reçu 404. **Aucune
+n'a deviné les noms réels.**
+
+**Le correctif.** Sauvegarde horodatée de la configuration
+(`mkl-energies.avant-refus-20261107T195128Z`), insertion des refus avant
+`location /`, `nginx -t`, puis rechargement — avec restauration automatique si
+le test avait échoué. Les refus sont en préfixe `^~`, qui l'emporte sur les
+expressions régulières : aucune règle ultérieure ne peut rouvrir le chemin. Pas
+de motif sur `.mjs`, délibérément : deux modules de `/lib/` sont publics par
+conception et un tel motif les aurait cassés.
+
+Vérifié ensuite dans les deux sens : les onze chemins sensibles répondent 404,
+et **les vingt-et-une ressources du site répondent toujours 200** — pages,
+`app.js`, `styles.css`, `catalogue-book.js`, `vendor/page-flip.browser.js`, les
+deux modules publics de `/lib/`, les données publiques, `robots.txt`,
+`sitemap.xml`, `admin.html`.
+
+**Ce qui reste à faire, et qui demande votre décision.** Les deux `.env` et les
+soixante-trois autres fichiers sont toujours *sur le disque*, dans la racine
+web — simplement plus servis. La défense en profondeur voudrait qu'ils en
+sortent, vers `/home/ubuntu/archives-deploy/` par exemple. Et bien que rien
+n'indique une fuite, faire tourner `SESSION_SECRET` et `ADMIN_PASSWORD_HASH`
+coûte peu : la première invalide les sessions d'administration ouvertes, la
+seconde change votre mot de passe d'administration.
+
 **Le nouveau script, `deploy/ovh/deployer-attribution.sh`.** Il part du constat
 inverse de son prédécesseur : le dépôt n'est pas un miroir du serveur. Il ne
 synchronise donc que ce qu'il connaît, nommément — les pages de `site-public/`
