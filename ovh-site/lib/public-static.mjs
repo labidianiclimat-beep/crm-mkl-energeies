@@ -25,6 +25,11 @@ const PUBLIC_DATA = new Set([
   "/data/category-covers.json",
   "/data/slots.js",
   "/data/realisations.js",
+  // `catalogue-book.js` l'importe pour le feuilletage du catalogue radiateurs.
+  // Son absence de cette liste aurait cassé cette page au déploiement : la
+  // production le sert, la liste ne le connaissait pas. Relevé en comparant ce
+  // que le site répond réellement à ce que ce module autorise.
+  "/data/catalogue-radiateurs.js",
 ]);
 
 const PUBLIC_LIB = new Set([

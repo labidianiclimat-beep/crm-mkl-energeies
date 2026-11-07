@@ -157,6 +157,10 @@ const state = {
   leads: [],
   leadsLoading: false,
   leadsFilter: "all",
+  crmJobs: [],
+  crmJobsLoading: false,
+  crmSyncEnabled: false,
+  crmSyncConfigured: false,
   complianceFilter: "all",
   complianceEnabled: false,
   appointments: [],
@@ -755,6 +759,109 @@ function intentLabel(intent) {
   if (intent === "rappel") return "Rappel";
   if (intent === "rdv") return "RDV";
   return "Devis";
+}
+
+const CRM_JOB_STATUS = {
+  pending: "En attente",
+  error: "Échec",
+  failed: "Abandonnée",
+  sent: "Transmis",
+};
+
+async function loadCrmOutbox() {
+  state.crmJobsLoading = true;
+  render();
+  try {
+    const res = await apiFetch("/api/crm-outbox");
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "File illisible");
+    state.crmJobs = data.jobs || [];
+    state.crmSyncEnabled = Boolean(data.syncEnabled);
+    state.crmSyncConfigured = Boolean(data.syncConfigured);
+  } catch (err) {
+    state.crmJobs = [];
+    // Le message n'est montré que si la session tient encore : après une
+    // déconnexion, l'échec est normal et une alerte serait trompeuse.
+    if (isLoggedIn()) showToast(err.message || "Impossible de charger la file", false);
+  } finally {
+    state.crmJobsLoading = false;
+    render();
+  }
+}
+
+async function retryCrmJob(jobId) {
+  try {
+    const res = await apiFetch(`/api/crm-outbox/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "Reprise impossible");
+    showToast("Tâche remise en file", true);
+  } catch (err) {
+    showToast(err.message || "Reprise impossible", false);
+  }
+  await loadCrmOutbox();
+}
+
+/**
+ * La file vue par l'administration. Le texte d'en-tête distingue les trois
+ * états possibles, parce qu'ils appellent trois gestes différents : liaison
+ * active, liaison configurée mais coupée, liaison pas encore configurée. Dans
+ * les trois cas la phrase dit la même chose sur le fond — aucune demande n'est
+ * perdue — pour qu'une file qui s'allonge n'inquiète pas à tort.
+ */
+function renderCrmOutboxPanel(panel) {
+  const retryable = state.crmJobs.filter((job) => job.status === "error" || job.status === "failed").length;
+  const syncNotice = state.crmSyncEnabled
+    ? "Les demandes sont transmises au CRM dès leur réception, et réessayées en cas de coupure."
+    : state.crmSyncConfigured
+      ? "Envoi vers le CRM désactivé. Les demandes restent en file, aucune n’est perdue."
+      : "Aucun envoi vers le CRM : la liaison n’est pas encore configurée. Les demandes restent en file.";
+  panel.innerHTML = `
+    <header class="page-head">
+      <div>
+        <h1>Synchronisation CRM</h1>
+        <p>${escapeHtml(syncNotice)}</p>
+      </div>
+      <button type="button" class="btn btn--ghost" id="refresh-sync" ${state.crmJobsLoading ? "disabled" : ""}>
+        ${state.crmJobsLoading ? "Chargement…" : "Actualiser"}
+      </button>
+    </header>
+    <p class="compliance-disclaimer">${retryable ? `${retryable} tâche${retryable > 1 ? "s" : ""} à reprendre.` : "Les nouvelles demandes restent d’abord enregistrées sur le site."}</p>
+    <div class="leads-list" id="sync-list"></div>
+  `;
+  const list = panel.querySelector("#sync-list");
+  if (state.crmJobsLoading && state.crmJobs.length === 0) {
+    list.innerHTML = `<div class="panel coming"><p>Chargement…</p></div>`;
+  } else if (state.crmJobs.length === 0) {
+    list.innerHTML = `<div class="panel coming"><h2>Aucune tâche</h2><p>Les prochaines demandes apparaîtront ici, sans quitter le site.</p></div>`;
+  } else {
+    list.innerHTML = state.crmJobs
+      .map((job) => {
+        const when = job.status === "error" && job.nextRetryAt ? ` · nouvel essai ${formatDate(job.nextRetryAt)}` : "";
+        const detail = job.status === "sent"
+          ? `Transmise le ${formatDate(job.sentAt)}`
+          : job.lastError
+            ? escapeHtml(job.lastError)
+            : "Pas encore transmise.";
+        const canRetry = job.status === "error" || job.status === "failed";
+        return `
+        <article class="lead-card">
+          <div class="lead-card__top">
+            <div>
+              <h3>${escapeHtml(job.label || "Demande")}</h3>
+              <p class="lead-card__meta">${escapeHtml(job.kind === "appointment" ? "Rendez-vous" : "Demande")} · ${escapeHtml(job.intent || "")}</p>
+            </div>
+            <span class="lead-status">${escapeHtml(CRM_JOB_STATUS[job.status] || job.status)}</span>
+          </div>
+          <p class="lead-card__msg">${detail}${escapeHtml(when)} · essais ${Number(job.attempts) || 0}</p>
+          ${canRetry ? `<button type="button" class="btn btn--ghost" data-retry="${escapeHtml(job.id)}">Reprendre</button>` : ""}
+        </article>`;
+      })
+      .join("");
+  }
+  panel.querySelector("#refresh-sync")?.addEventListener("click", loadCrmOutbox);
+  for (const button of panel.querySelectorAll("[data-retry]")) {
+    button.addEventListener("click", () => retryCrmJob(button.dataset.retry));
+  }
 }
 
 function renderLeadsPanel(panel) {
@@ -1682,6 +1789,7 @@ function renderShell() {
           <button type="button" class="nav-item ${state.view === "agenda" ? "is-active" : ""}" data-view="agenda">Agenda RDV</button>
           <button type="button" class="nav-item ${state.view === "realisations" ? "is-active" : ""}" data-view="realisations">Réalisations</button>
           <button type="button" class="nav-item ${state.view === "clim-gallery" ? "is-active" : ""}" data-view="clim-gallery">Galerie clim</button>
+          <button type="button" class="nav-item ${state.view === "sync" ? "is-active" : ""}" data-view="sync">Synchro CRM</button>
           <button type="button" class="nav-item ${state.view === "contenu" ? "is-active" : ""}" data-view="contenu">
             Contenu
             <span class="nav-item__soon">Bientôt</span>
@@ -1710,6 +1818,10 @@ function renderShell() {
         loadAppointments();
         return;
       }
+      if (next === "sync" && state.crmJobs.length === 0 && !state.crmJobsLoading) {
+        loadCrmOutbox();
+        return;
+      }
       if (next === "clim-gallery" && state.climGallery.items.length === 0 && !state.climGalleryLoading) {
         loadClimGallery();
         return;
@@ -1724,6 +1836,7 @@ function renderShell() {
   else if (state.view === "leads") renderLeadsPanel(panel);
   else if (state.view === "agenda") renderAgendaPanel(panel);
   else if (state.view === "clim-gallery") renderClimGalleryPanel(panel);
+  else if (state.view === "sync") renderCrmOutboxPanel(panel);
   else if (state.view === "contenu") {
     comingSoon(panel, "Contenu", "Textes, téléphone, horaires — bientôt modifiables ici.");
   } else if (state.view === "compte") {

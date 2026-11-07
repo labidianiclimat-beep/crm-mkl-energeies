@@ -106,8 +106,46 @@ controles() {
   # directement sur le serveur les 3 et 4 novembre et ne sont jamais revenues
   # au dépôt. Les écraser serait une régression de sécurité silencieuse.
   #
-  # Le contrôle compare donc fichier par fichier et refuse tout déploiement
-  # qui retirerait des lignes. Il demande un accès SSH en lecture seule.
+  # Le contrôle compare fichier par fichier, en lecture seule par SSH.
+  #
+  # Il compare les CAPACITÉS, non les lignes. Une première version comptait les
+  # lignes retirées : elle a bien arrêté la régression du 7 novembre, mais elle
+  # condamnait aussi tout remaniement. Le report de l attribution remplace par
+  # exemple un `serveStatic` écrit à la main par un appel au module durci, et
+  # trois écritures non verrouillées par le stockage à verrou : soixante-six
+  # lignes de moins, pas une capacité perdue. Compter les lignes aurait forcé à
+  # désarmer le garde-fou pour déployer — c est-à-dire à le perdre le jour où
+  # il sert.
+  #
+  # Sont donc relevés les noms de fonctions et les chemins de routes présents
+  # en production. Si l un manque au dépôt, le déploiement est refusé : c est
+  # exactement ce qui se serait produit le 7 novembre, où
+  # `handleAdminForgotPassword`, `handleAdminChangePassword` et
+  # `destroyAllSessions` auraient disparu avec leurs deux routes.
+  # Retraits délibérés. Une fonction ne disparaît jamais par accident sans
+  # laisser son nom ici, avec sa raison. C est volontairement pénible : le prix
+  # d un retrait est une ligne écrite à la main, et une route ne s exempte
+  # jamais — une route est une capacité visible par l utilisateur.
+  EXEMPTEES=$(cat <<'FIN'
+fonction safePath
+fonction writeJsonArray
+FIN
+)
+  # safePath       : remplacée par `lib/public-static.mjs`, qui refuse en plus
+  #                  les chemins privés au lieu de les servir.
+  # writeJsonArray : remplacée par le stockage à verrou de `lib/json-store.mjs`.
+  #                  Sa dernière écriture non verrouillée pouvait perdre une
+  #                  demande arrivée pendant une mise à jour de statut.
+
+  capacites() {
+    # Deux familles : `function nom(` sous toutes ses formes, et les chemins
+    # littéraux comparés ou testés dans le routage.
+    {
+      grep -oE '^\s*(export +)?(async +)?function +[A-Za-z_$][A-Za-z0-9_$]*' "$1" \
+        | grep -oE '[A-Za-z_$][A-Za-z0-9_$]*$' | sed 's/^/fonction /'
+      grep -oE '"/api/[A-Za-z0-9_/-]*"' "$1" | tr -d '"' | sed 's/^/route /'
+    } | sort -u
+  }
   TEMPO=$(mktemp -d)
   PERTES=0
   for COUPLE in "server.mjs:server.mjs" "admin.js:admin.js" "lib/admin-auth.mjs:lib/admin-auth.mjs"; do
@@ -115,12 +153,25 @@ controles() {
     REMOTE="${COUPLE##*:}"
     if scp -q -o BatchMode=yes -o IdentitiesOnly=yes ${CLE:+-i "$CLE"} \
          "$HOTE:$DISTANT/$REMOTE" "$TEMPO/ref" 2>/dev/null; then
-      RETIREES=$(diff "$TEMPO/ref" "$RACINE/$LOCAL" 2>/dev/null | grep -c '^<' || true)
-      if [ "${RETIREES:-0}" -gt 0 ]; then
-        nok "$LOCAL n efface rien en production" "$RETIREES lignes seraient PERDUES"
+      capacites "$TEMPO/ref" > "$TEMPO/avant"
+      capacites "$RACINE/$LOCAL" > "$TEMPO/apres"
+      # `comm -23` : présent en production, absent du dépôt. Les retraits
+      # déclarés sont écartés ensuite, jamais avant : ainsi la liste
+      # d exemptions ne peut pas masquer une route.
+      printf '%s\n' "$EXEMPTEES" | grep . | sort -u > "$TEMPO/exemptees"
+      comm -23 "$TEMPO/avant" "$TEMPO/apres" | grep . | sort -u > "$TEMPO/brutes"
+      MANQUANTES=$(comm -23 "$TEMPO/brutes" "$TEMPO/exemptees")
+      DECLAREES=$(comm -12 "$TEMPO/brutes" "$TEMPO/exemptees" | grep -c . || true)
+      NB=$(printf '%s' "$MANQUANTES" | grep -c . || true)
+      if [ "${NB:-0}" -gt 0 ]; then
+        nok "$LOCAL garde tout ce que la production sert" "$NB capacite(s) PERDUE(S)"
+        printf '%s\n' "$MANQUANTES" | sed 's/^/           perdue : /'
         PERTES=$((PERTES + 1))
       else
-        ok "$LOCAL n efface rien en production"
+        AJOUTS=$(comm -13 "$TEMPO/avant" "$TEMPO/apres" | grep -c . || true)
+        DETAIL="+${AJOUTS:-0} nouvelle(s)"
+        [ "${DECLAREES:-0}" -eq 0 ] || DETAIL="$DETAIL, $DECLAREES retrait(s) declare(s)"
+        ok "$LOCAL garde tout ce que la production sert" "$DETAIL"
       fi
     else
       nok "$LOCAL comparé à la production" "lecture impossible"
@@ -128,9 +179,10 @@ controles() {
   done
   rm -rf "$TEMPO"
   if [ "$PERTES" -gt 0 ]; then
-    printf '\n  Le dépôt est, pour ces fichiers, antérieur à la production.\n'
-    printf '  Il faut d abord y rapatrier les versions en service, puis y\n'
-    printf '  reporter l attribution. Déployer en l état perdrait du travail.\n'
+    printf '\n  Le dépôt est, pour ces fichiers, antérieur à la production : il ne\n'
+    printf '  sait plus faire quelque chose que le serveur fait aujourd hui. Il faut\n'
+    printf '  d abord y rapatrier les versions en service, puis y reporter\n'
+    printf '  l attribution. Déployer en l état perdrait du travail.\n'
   fi
 
   echo

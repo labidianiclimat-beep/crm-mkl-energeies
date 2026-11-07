@@ -655,6 +655,42 @@ déploiement.
 trois fichiers en service, puis y reporter les 214 lignes d'attribution. Alors
 seulement le contrôle passera, et le déploiement n'effacera plus rien.
 
+### Report de l'attribution fait le 7 novembre 2026 — et le garde-fou refait
+
+Le rapatriement, puis le report, sont faits. Les neuf contrôles passent, les
+125 essais du site et les 1151 du CRM aussi.
+
+Le report a mis en défaut le garde-fou lui-même, et c'est la partie
+intéressante. Il comptait les lignes retirées. Il avait bien arrêté la
+régression de la veille, mais le report remplace volontairement un `serveStatic`
+écrit à la main par un appel au module durci, et trois écritures non
+verrouillées par le stockage à verrou : **66 lignes de moins, aucune capacité
+perdue**. Un garde-fou qui condamne tout remaniement finit désarmé pour pouvoir
+déployer, c'est-à-dire absent le jour où il sert.
+
+Il compare donc désormais les **capacités** — noms de fonctions et chemins de
+routes — et non les lignes. Contre-épreuve faite dans les deux sens : appliqué à
+l'état du dépôt d'avant le rapatriement, il retrouve exactement la régression,
+`handleAdminForgotPassword`, `handleAdminChangePassword` et leurs deux routes.
+Appliqué à l'état actuel, il ne signale plus que `safePath` et
+`writeJsonArray` — deux retraits délibérés, qui doivent être **déclarés** par
+leur nom et leur raison dans le script. Une route, elle, ne s'exempte jamais :
+c'est une capacité visible par l'utilisateur.
+
+Trois défauts trouvés au passage, qui n'avaient rien à voir avec l'attribution :
+
+- `handlePatchLead` et `handlePatchAppointment` lisaient, modifiaient et
+  réécrivaient la liste **hors verrou**. Une mise à jour de statut concurrente
+  d'une demande entrante réécrivait la liste telle qu'elle l'avait lue, et la
+  demande disparaissait sans trace. Les deux passent maintenant par
+  `updateJsonRecords`, sous le même verrou que les ajouts. Au passage, le statut
+  est validé avant la prise du verrou : inutile de le prendre pour refuser.
+- `PRIVATE_FILES` restait dans `server.mjs` après le passage au module durci.
+  Le laisser était pire qu'inutile : on aurait cru que la protection venait de
+  là, et on aurait ajouté un fichier privé à une liste que plus personne ne
+  consulte. La vraie liste est dans `lib/public-static.mjs`.
+- `safePath`, `writeJsonArray` et la table `MIME` n'avaient plus d'appelant.
+
 **L'ordre retenu**, chaque étape étant réversible :
 
 1. nginx : ajouter les refus manquants, recharger, vérifier que

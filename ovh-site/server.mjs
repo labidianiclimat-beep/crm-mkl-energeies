@@ -36,6 +36,12 @@ import {
   readProof,
   FORM_COPY_VERSION,
 } from "./lib/compliance-proof.mjs";
+import { readJsonArray as readStoredJsonArray } from "./lib/json-store.mjs";
+import { crmSyncEnabled, listCrmJobs, processCrmOutbox, requeueCrmJob } from "./lib/crm-outbox.mjs";
+import { crmSyncConfig, crmSyncConfigured, sendCrmJob } from "./lib/crm-sync.mjs";
+import { appendAppointmentRecord, appendLeadRecord, updateJsonRecords } from "./lib/lead-records.mjs";
+import { parseAttribution, parseFirstAttribution } from "./lib/lead-attribution.mjs";
+import { servePublicFile } from "./lib/public-static.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -69,8 +75,16 @@ const PORT = Number(process.env.PORT) || 4317;
 const ROOT = __dirname;
 const COVERS_PATH = path.join(ROOT, "data", "covers.json");
 const CATEGORY_COVERS_PATH = path.join(ROOT, "data", "category-covers.json");
-const LEADS_PATH = path.join(ROOT, "data", "leads.json");
-const APPTS_PATH = path.join(ROOT, "data", "appointments.json");
+// Les trois fichiers qui portent des demandes passent par `DATA_DIR`, qu'une
+// variable d'environnement peut détourner. C'est ce qui permet aux essais
+// d'écrire ailleurs que dans les données réelles : sans cela, lancer la
+// recette sur le serveur écrirait dans les demandes des clients.
+const DATA_DIR = process.env.MKL_DATA_DIR
+  ? path.resolve(process.env.MKL_DATA_DIR)
+  : path.join(ROOT, "data");
+const LEADS_PATH = path.join(DATA_DIR, "leads.json");
+const APPTS_PATH = path.join(DATA_DIR, "appointments.json");
+const OUTBOX_PATH = path.join(DATA_DIR, "crm-outbox.json");
 const EXTRA_PATH = path.join(ROOT, "data", "realisations-extra.json");
 const CLIM_GALLERY_PATH = path.join(ROOT, "data", "clim-gallery.json");
 const GOOGLE_REVIEWS_PATH = path.join(ROOT, "data", "google-reviews.json");
@@ -170,23 +184,11 @@ async function watermarkPhoto(inputBuf) {
     .toBuffer();
 }
 
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".xml": "application/xml; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".pdf": "application/pdf",
-};
+// Les types de contenu et la liste des fichiers privés vivaient ici, au service
+// du `serveStatic` écrit à la main. Ils sont désormais dans
+// `lib/public-static.mjs`, avec le reste de la décision. Les laisser en double
+// serait pire qu'inutile : on croirait que la protection vient d'ici, et on
+// ajouterait un fichier privé à une liste que plus personne ne consulte.
 
 const HOUSING = new Set(["maison", "appartement", "pro"]);
 const INTENTS = new Set(["devis", "rappel"]);
@@ -204,14 +206,6 @@ const CLIM_SURFACE_BAND = new Set(["lt40", "40_80", "80_150", "gt150"]);
 const CLIM_EXISTING = new Set(["aucune", "a_remplacer", "a_completer"]);
 const CLIM_NEED = new Set(["rafraichir", "chauffer_rafraichir", "conseil"]);
 const CLIM_SYSTEM_HINT = new Set(["monosplit", "multisplit"]);
-const PRIVATE_FILES = new Set([
-  "leads.json",
-  "appointments.json",
-  "realisations-extra.json",
-  "clim-gallery.json",
-  "consent-proofs.jsonl",
-  "proofs",
-]);
 
 function emptyClimGallery() {
   return { version: 1, publishToSite: false, updatedAt: null, items: [] };
@@ -804,14 +798,6 @@ async function handleAdminForgotPassword(req, res) {
   }
 }
 
-function safePath(urlPath) {
-  const decoded = decodeURIComponent((urlPath || "/").split("?")[0]);
-  const cleaned = decoded === "/" ? "/index.html" : decoded;
-  const full = path.normalize(path.join(ROOT, cleaned));
-  if (!full.startsWith(ROOT)) return null;
-  return full;
-}
-
 async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -853,19 +839,14 @@ function parsePersonName(data) {
   };
 }
 
+/**
+ * Délègue au stockage verrouillé. La différence est volontaire : cette version
+ * ne rend plus une liste vide quand le fichier est illisible, elle lève. Un
+ * JSON corrompu rendu comme « aucune demande » aurait été réécrit vide à
+ * l'enregistrement suivant, et les demandes auraient disparu sans bruit.
+ */
 async function readJsonArray(filePath) {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writeJsonArray(filePath, rows) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(rows, null, 2)}\n`, "utf8");
+  return readStoredJsonArray(filePath);
 }
 
 async function handleSaveCovers(req, res) {
@@ -1008,6 +989,20 @@ async function handleCreateLead(req, res) {
     const callbackChecked = Boolean(data.callbackChecked);
     const pagePath = String(data.pagePath || "").trim().slice(0, 200);
     const uiActionLabel = String(data.uiActionLabel || "").trim().slice(0, 160);
+    // Provenance du contact. Deux lectures conservées côte à côte : celle de
+    // la visite qui a conduit au formulaire, et celle du tout premier contact
+    // mémorisé par le navigateur. On ne tranche pas ici entre les deux ; le
+    // CRM les restitue toutes deux et laisse le choix du modèle à la lecture.
+    // `ownHost` sert à écarter notre propre domaine d'un référent, sans quoi
+    // une navigation interne passerait pour une origine extérieure.
+    const attribution = parseAttribution(data.attribution || data, {
+      headerReferer: req.headers.referer || "",
+      pagePath,
+      ownHost: req.headers.host || "",
+    });
+    const attributionFirst = parseFirstAttribution(data.attributionFirst, {
+      ownHost: req.headers.host || "",
+    });
     const complianceOn = isComplianceEnabled();
 
     if (complianceOn) {
@@ -1084,11 +1079,19 @@ async function handleCreateLead(req, res) {
             }),
           }
         : {}),
+      attribution,
+      attributionFirst,
     };
 
-    const leads = await readJsonArray(LEADS_PATH);
-    leads.unshift(lead);
-    await writeJsonArray(LEADS_PATH, leads);
+    // Un seul appel, sous verrou, qui écrit la demande et sa tâche de
+    // transmission ensemble. La version précédente lisait, modifiait et
+    // réécrivait le fichier sans verrou : deux demandes simultanées pouvaient
+    // s'écraser l'une l'autre. Et la tâche n'existait pas, donc rien ne
+    // garantissait qu'une demande enregistrée finisse par atteindre le CRM.
+    await appendLeadRecord(DATA_DIR, LEADS_PATH, OUTBOX_PATH, lead);
+    // Tentative immédiate, sans attendre le passage périodique. L'échec est
+    // sans conséquence : la tâche reste en file et sera reprise.
+    runCrmOutbox().catch(() => {});
 
     console.log(`[lead] ${lead.intent} — ok`);
     json(res, 201, {
@@ -1121,37 +1124,141 @@ async function handlePatchLead(req, res, id) {
   try {
     const raw = await readBody(req);
     const data = JSON.parse(raw);
-    const leads = await readJsonArray(LEADS_PATH);
-    const idx = leads.findIndex((l) => l.id === id);
-    if (idx < 0) {
-      json(res, 404, { ok: false, error: "Lead introuvable" });
+    // Le statut est contrôlé avant d'ouvrir le verrou : rien ne sert de le
+    // prendre pour refuser ensuite.
+    if (data.status != null && !["nouveau", "contacte", "traite"].includes(String(data.status || ""))) {
+      json(res, 400, { ok: false, error: "Statut invalide" });
       return;
     }
 
-    const patch = { updatedAt: new Date().toISOString() };
-    if (data.status != null) {
-      const status = String(data.status || "");
-      if (!["nouveau", "contacte", "traite"].includes(status)) {
-        json(res, 400, { ok: false, error: "Statut invalide" });
-        return;
+    // Lecture, modification et écriture sous un même verrou. Séparées comme
+    // avant, une mise à jour de statut concurrente d'une demande entrante
+    // réécrivait la liste telle qu'elle l'avait lue, et la nouvelle demande
+    // disparaissait.
+    let missing = false;
+    let saved = null;
+    await updateJsonRecords(DATA_DIR, LEADS_PATH, async (leads) => {
+      const idx = leads.findIndex((l) => l.id === id);
+      if (idx < 0) {
+        missing = true;
+        return leads;
       }
-      patch.status = status;
-    }
-
-    if (isComplianceEnabled() && data.opposition === true) {
-      patch.opposition = true;
-      patch.callbackCompliance = "opposition";
-      patch.oppositionAt = new Date().toISOString();
-      if (leads[idx].proofId) {
-        await appendOppositionToProof(ROOT, leads[idx].proofId, String(data.oppositionNote || ""));
+      const patch = { updatedAt: new Date().toISOString() };
+      if (data.status != null) patch.status = String(data.status);
+      if (isComplianceEnabled() && data.opposition === true) {
+        patch.opposition = true;
+        patch.callbackCompliance = "opposition";
+        patch.oppositionAt = new Date().toISOString();
+        if (leads[idx].proofId) {
+          await appendOppositionToProof(ROOT, leads[idx].proofId, String(data.oppositionNote || ""));
+        }
       }
-    }
+      leads[idx] = { ...leads[idx], ...patch };
+      saved = leads[idx];
+      return leads;
+    });
 
-    leads[idx] = { ...leads[idx], ...patch };
-    await writeJsonArray(LEADS_PATH, leads);
-    json(res, 200, { ok: true, lead: enrichLeadCompliance(leads[idx]) });
+    if (missing) {
+      json(res, 404, { ok: false, error: "Lead introuvable" });
+      return;
+    }
+    json(res, 200, { ok: true, lead: enrichLeadCompliance(saved) });
   } catch (err) {
     json(res, 500, { ok: false, error: String(err.message || err) });
+  }
+}
+
+/**
+ * La liaison CRM demande deux conditions : le drapeau d’activation et une
+ * configuration complète. Un drapeau activé sans secret ne doit rien tenter.
+ */
+function syncActive() {
+  return crmSyncEnabled() && crmSyncConfigured();
+}
+
+/** Retrouve la demande d’origine, seule source du contenu transmis. */
+async function crmJobRecord(job) {
+  const rows = await readJsonArray(job.kind === "appointment" ? APPTS_PATH : LEADS_PATH);
+  return rows.find((row) => row.id === job.sourceId) || null;
+}
+
+let crmSyncRunning = false;
+
+/**
+ * Passage de la file. Jamais deux passages en parallèle : deux envois
+ * simultanés de la même tâche produiraient deux tentatives inutiles.
+ */
+async function runCrmOutbox() {
+  if (crmSyncRunning || !syncActive()) return { ran: false, sent: 0, failed: 0 };
+  crmSyncRunning = true;
+  try {
+    // Le jeton de contournement n'est pas un réglage du CRM mais de Vercel :
+    // sans lui, « Vercel Authentication » renvoie 401 avant que la requête
+    // n'atteigne la route d'ingestion, et la signature n'est jamais lue.
+    const { endpoint, keyId, secret, bypassToken } = crmSyncConfig();
+    const result = await processCrmOutbox(DATA_DIR, OUTBOX_PATH, {
+      enabled: true,
+      async send(job) {
+        const record = await crmJobRecord(job);
+        return sendCrmJob(job, { record, endpoint, keyId, secret, bypassToken });
+      },
+    });
+    if (result.sent || result.failed) {
+      console.log(`[crm-sync] transmis ${result.sent} — échecs ${result.failed}`);
+    }
+    return result;
+  } catch (err) {
+    // Le message peut citer une adresse technique, jamais le secret. La remise
+    // à zéro du verrou est en `finally` : une erreur ici le laisserait fermé et
+    // éteindrait la synchronisation jusqu'au redémarrage.
+    console.error(`[crm-sync] passage interrompu : ${String(err.message || err)}`);
+    return { ran: false, sent: 0, failed: 0 };
+  } finally {
+    crmSyncRunning = false;
+  }
+}
+
+/**
+ * La file telle que l'administration la voit. Le nom de la personne est joint
+ * pour que la liste soit lisible, mais il est repris de la demande d'origine :
+ * la file elle-même ne stocke aucune coordonnée.
+ */
+async function handleListCrmOutbox(_req, res) {
+  try {
+    const jobs = await listCrmJobs(OUTBOX_PATH);
+    const leads = await readJsonArray(LEADS_PATH);
+    const appointments = await readJsonArray(APPTS_PATH);
+    const leadById = new Map(leads.map((row) => [row.id, row]));
+    const appointmentById = new Map(appointments.map((row) => [row.id, row]));
+    json(res, 200, {
+      ok: true,
+      syncEnabled: syncActive(),
+      syncConfigured: crmSyncConfigured(),
+      jobs: jobs.map((job) => {
+        const person = job.kind === "appointment" ? appointmentById.get(job.sourceId) : leadById.get(job.sourceId);
+        return {
+          ...job,
+          label: person?.name || "",
+          intent: job.kind === "appointment" ? "rdv" : person?.intent || "",
+        };
+      }),
+    });
+  } catch (err) {
+    json(res, 500, { ok: false, error: String(err.message || err) });
+  }
+}
+
+async function handleRequeueCrmJob(_req, res, jobId) {
+  try {
+    const job = await requeueCrmJob(DATA_DIR, OUTBOX_PATH, jobId);
+    if (!job) {
+      json(res, 404, { ok: false, error: "Tâche introuvable." });
+      return;
+    }
+    runCrmOutbox().catch(() => {});
+    json(res, 200, { ok: true, job });
+  } catch (err) {
+    json(res, 409, { ok: false, error: String(err.message || err) });
   }
 }
 
@@ -1198,6 +1305,14 @@ async function handleCreateAppointment(req, res) {
     let meetingType = String(data.meetingType || "telephone").trim();
     if (!["telephone", "physique"].includes(meetingType)) meetingType = "telephone";
     const pagePath = String(data.pagePath || "/rdv.html").trim().slice(0, 200);
+    const attribution = parseAttribution(data.attribution || data, {
+      headerReferer: req.headers.referer || "",
+      pagePath,
+      ownHost: req.headers.host || "",
+    });
+    const attributionFirst = parseFirstAttribution(data.attributionFirst, {
+      ownHost: req.headers.host || "",
+    });
     const complianceOn = isComplianceEnabled();
 
     if (!person.ok) {
@@ -1293,14 +1408,14 @@ async function handleCreateAppointment(req, res) {
       ...(proof
         ? { proofId: proof.proofId, formCopyVersion: FORM_COPY_VERSION }
         : {}),
+      attribution,
+      attributionFirst,
     };
 
-    appointments.unshift(appointment);
-    await writeJsonArray(APPTS_PATH, appointments);
-
-    // Aussi dans le CRM leads — sans event generate_lead (côté client uniquement book_appointment)
-    const leads = await readJsonArray(LEADS_PATH);
-    leads.unshift({
+    // Le miroir dans les demandes — sans événement de conversion ici : côté
+    // client, seul « book_appointment » est émis, et le site n'en déclenche
+    // aucun depuis le serveur.
+    const mirror = {
       id: leadMirrorId,
       createdAt,
       status: "nouveau",
@@ -1328,8 +1443,21 @@ async function handleCreateAppointment(req, res) {
             callbackChecked: false,
           }
         : {}),
-    });
-    await writeJsonArray(LEADS_PATH, leads);
+      attribution,
+      attributionFirst,
+    };
+
+    // Un seul appel sous verrou pour les trois écritures : le rendez-vous, son
+    // miroir dans les demandes, et la tâche de transmission. Séparées comme
+    // avant, une panne entre la première et la deuxième laissait un rendez-vous
+    // sans demande correspondante.
+    await appendAppointmentRecord(
+      DATA_DIR,
+      { appointmentsPath: APPTS_PATH, leadsPath: LEADS_PATH, outboxPath: OUTBOX_PATH },
+      appointment,
+      mirror
+    );
+    runCrmOutbox().catch(() => {});
 
     console.log(`[rdv] ${date} ${time} — ok`);
     json(res, 201, {
@@ -1354,19 +1482,27 @@ async function handlePatchAppointment(req, res, id) {
       json(res, 400, { ok: false, error: "Statut invalide" });
       return;
     }
-    const appointments = await readJsonArray(APPTS_PATH);
-    const idx = appointments.findIndex((a) => a.id === id);
-    if (idx < 0) {
+    let missing = false;
+    let saved = null;
+    await updateJsonRecords(DATA_DIR, APPTS_PATH, (appointments) => {
+      const idx = appointments.findIndex((a) => a.id === id);
+      if (idx < 0) {
+        missing = true;
+        return appointments;
+      }
+      appointments[idx] = {
+        ...appointments[idx],
+        status,
+        updatedAt: new Date().toISOString(),
+      };
+      saved = appointments[idx];
+      return appointments;
+    });
+    if (missing || !saved) {
       json(res, 404, { ok: false, error: "RDV introuvable" });
       return;
     }
-    appointments[idx] = {
-      ...appointments[idx],
-      status,
-      updatedAt: new Date().toISOString(),
-    };
-    await writeJsonArray(APPTS_PATH, appointments);
-    json(res, 200, { ok: true, appointment: appointments[idx] });
+    json(res, 200, { ok: true, appointment: saved });
   } catch (err) {
     json(res, 500, { ok: false, error: String(err.message || err) });
   }
@@ -1873,53 +2009,18 @@ async function handleGoogleReviews(_req, res) {
   }
 }
 
+/**
+ * Le service des fichiers passe par `servePublicFile`, qui raisonne par
+ * chemins autorisés plutôt que par noms de fichiers interdits. La version
+ * précédente refusait une liste de noms de base : tout fichier non prévu dans
+ * cette liste était servi, où qu'il soit. C'est ainsi que `deploy/` s'est
+ * retrouvé public, avec soixante-cinq fichiers dont deux sauvegardes
+ * contenant les secrets d'administration. Le module refuse à l'inverse tout
+ * `/lib/`, `/data/`, `/deploy/`, `/tests/` et `/node_modules/` sauf les
+ * quelques chemins nommément publics.
+ */
 async function serveStatic(req, res) {
-  const filePath = safePath(req.url || "/");
-  if (!filePath) {
-    res.writeHead(403).end("Forbidden");
-    return;
-  }
-
-  const base = path.basename(filePath);
-  const underProofs =
-    filePath === path.join(ROOT, "data", "proofs") ||
-    filePath.startsWith(path.join(ROOT, "data", "proofs") + path.sep);
-  if (PRIVATE_FILES.has(base) || underProofs) {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Not found");
-    return;
-  }
-
-  try {
-    let statPath = filePath;
-    let stat = await fs.stat(statPath).catch(() => null);
-    if (stat?.isDirectory()) {
-      statPath = path.join(statPath, "index.html");
-      stat = await fs.stat(statPath);
-    }
-    const ext = path.extname(statPath).toLowerCase();
-    const data = await fs.readFile(statPath);
-    // Images / polices : cache long (les URLs sont versionnées ?v=…).
-    // HTML : pas de cache. CSS/JS : cache court (aussi versionnés en prod).
-    // JSON data : no-store.
-    let cacheControl = "no-cache";
-    if (ext === ".json") cacheControl = "no-store";
-    else if ([".png", ".jpg", ".jpeg", ".webp", ".svg", ".ico", ".woff2", ".gif", ".pdf"].includes(ext)) {
-      cacheControl = "public, max-age=31536000, immutable";
-    } else if ([".css", ".js", ".mjs"].includes(ext)) {
-      cacheControl = "public, max-age=86400";
-    } else if (ext === ".html") {
-      cacheControl = "no-cache";
-    }
-    res.writeHead(200, {
-      "Content-Type": MIME[ext] || "application/octet-stream",
-      "Cache-Control": cacheControl,
-    });
-    res.end(data);
-  } catch {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Not found");
-  }
+  await servePublicFile(req, res, ROOT);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1973,6 +2074,24 @@ const server = http.createServer(async (req, res) => {
     if (!requireAdmin(req, res)) return;
     await handleListLeads(req, res);
     return;
+  }
+  if (req.method === "GET" && pathname === "/api/crm-outbox") {
+    if (!requireAdmin(req, res)) return;
+    await handleListCrmOutbox(req, res);
+    return;
+  }
+  // La reprise d'une tâche est une action d'administration : le contrôle est
+  // posé avant l'appel, et l'identifiant est refusé s'il contient une barre
+  // oblique, qui permettrait de viser un autre chemin.
+  if (req.method === "POST" && pathname.startsWith("/api/crm-outbox/") && pathname.endsWith("/retry")) {
+    const id = decodeURIComponent(
+      pathname.slice("/api/crm-outbox/".length, pathname.length - "/retry".length)
+    );
+    if (id && !id.includes("/")) {
+      if (!requireAdmin(req, res)) return;
+      await handleRequeueCrmJob(req, res, id);
+      return;
+    }
   }
   if (req.method === "PATCH" && pathname.startsWith("/api/leads/")) {
     const id = pathname.slice("/api/leads/".length);
