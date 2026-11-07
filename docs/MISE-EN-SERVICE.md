@@ -129,10 +129,23 @@ l'ajout : sans elle, le client *pose une question*, et sur une entrée standard
 déjà consommée par la valeur de la clé, la réponse à cette question est
 imprévisible.
 
-#### Supprimer l'ancienne clé — préparé, en attente d'accord
+#### Désactiver l'ancienne clé Solar — préparé, en attente d'accord
 
-À ne faire qu'après l'épreuve en production. Trois clés Google distinctes
-existent dans ce système, et c'est là qu'est le danger :
+**L'épreuve en production est faite**, le 7 novembre au soir : quatre pans,
+l'ombrage et la carte satellite affichés, avec le message « Google Solar
+appliqués ». Ce message est le plus concluant des quatre possibles, car il
+n'apparaît que si les **deux** points d'entrée ont répondu —
+`buildingInsights:findClosest` pour les pans, `dataLayers:get` pour l'ombrage et
+la carte de chaleur. Une clé qui ne porterait que le premier afficherait « Pans
+et ombrages appliqués » sans carte de chaleur. Les journaux du déploiement le
+confirment en négatif : **zéro enregistrement, donc zéro erreur**, sur la
+fenêtre qui contient cet essai.
+
+On désactive, on ne supprime pas — du moins pas tout de suite. Une
+restriction se défait d'un clic, une suppression est définitive.
+
+Trois identifiants Google distincts existent dans ce système, et c'est là qu'est
+le danger :
 
 | Identifiant | Qui l'utilise | Restreinte à |
 |---|---|---|
@@ -158,11 +171,28 @@ Comment reconnaître à coup sûr l'ancienne clé Solar, dans
 3. **Ne supprimez jamais une clé qui montre encore du trafic.** C'est le seul
    contrôle qui ne trompe pas.
 
-Et plutôt que de supprimer d'emblée, **restreignez-la d'abord à une API qu'elle
-n'utilise pas** : la clé devient inerte, et le geste est réversible d'un clic.
-Attendez vingt-quatre heures, vérifiez qu'aucune étude photovoltaïque ni le
-site ne se plaignent, puis supprimez. Une suppression est définitive ; une
-restriction ne l'est pas.
+**Le geste de désactivation, et lui seul.** Sur l'ancienne clé Solar, et sur
+aucune autre : **Restrictions relatives aux API → Restreindre la clé →**
+décocher « Solar API », cocher une API que ce projet n'utilise pas, puis
+enregistrer. La clé existe toujours, elle ne peut plus rien appeler. Ne touchez
+ni aux restrictions de la clé Places, ni aux écrans OAuth du calendrier :
+l'écran des identifiants les présente côte à côte, et c'est là que se commettent
+les confusions.
+
+**Le contrôle qui prouve que c'est la bonne clé qui a été désactivée** : rouvrez
+une étude d'installation complète et relancez la recherche de toiture. Si le
+message « Google Solar appliqués » revient, la nouvelle clé travaille seule et
+l'ancienne n'était pas celle en service. Si le message devient « Google Solar
+n'a pas répondu », c'est la clé active qui vient d'être restreinte : rétablissez
+sa restriction à « Solar API », ce qui remet tout en place.
+
+Vérifiez aussi que les avis Google s'affichent toujours sur la page d'accueil de
+mkl-energies.fr — c'est le contrôle de la clé Places, celle qu'il ne fallait pas
+toucher.
+
+**La suppression vient après**, pas le même jour. Attendez vingt-quatre heures,
+le temps qu'une étude photovoltaïque et une visite du site aient eu lieu
+normalement, puis supprimez la clé devenue inerte.
 
 Si l'ancienne clé était supprimée par erreur à la place de la bonne, le CRM ne
 tomberait pas : l'étude retombe sur PVGIS et l'écran le dit. Le site, lui,
@@ -381,6 +411,28 @@ chronologique la respecte, et les trois autres sont indépendantes :
 | 3 | `20261102_web_lead_ingest.sql` | 15 objets, la file des demandes |
 | 4 | `20261102_lead_attribution.sql` | 21 objets, l'attribution et les colonnes d'origine |
 | 5 | `20261105_web_lead_idempotence.sql` | 9 objets, étend les précédentes |
+
+**Ce que ces cinq migrations font, et ne font pas.** Vérifié fichier par fichier
+avant toute application :
+
+- **Aucune création sans garde.** Zéro table, zéro index, zéro colonne sans
+  `if not exists`. Les vingt fonctions sont en `create or replace`, les sept
+  déclencheurs sont retirés avant d'être posés, l'unique politique aussi. Les
+  cinq sont donc rejouables : les relancer sur une base déjà à jour ne produit
+  rien.
+- **Aucune écriture dans les données existantes.** Les `update` et `insert` que
+  l'on trouve dans ces fichiers sont tous **à l'intérieur de corps de
+  fonctions** — contrôlé en suivant les délimiteurs `$$`. Rien ne s'exécute au
+  moment de l'application ; ces instructions n'entreront en jeu que lorsque
+  l'application appellera ces fonctions, ce qu'elle ne peut pas faire avant que
+  le trousseau soit posé.
+- **Les quatre colonnes d'origine sont ajoutées sans valeur par défaut**, donc
+  nulles sur les 246 opportunités existantes. Aucune origine déjà enregistrée
+  n'est modifiée, et la contrainte `commercial_opportunities_origin_chk` est
+  satisfaite d'office par sa première branche — « ni canal ni catégorie ». Sa
+  validation balaie 360 ko : le verrou se compte en millisecondes.
+- **L'ordre interne tient** : les deux fonctions dont dépend la contrainte sont
+  définies aux lignes 30 et 47, la contrainte à la ligne 91.
 
 **Une panne latente, découverte en préparant cette étape.** Relier un nouveau
 compte Google Calendar est **impossible en production aujourd'hui**.
