@@ -68,6 +68,24 @@ test("un échec d’intégration est réessayé, jamais abandonné en silence", 
   assert.match(QUEUE, /counts\.retry \+= 1/);
 });
 
+test("les passages planifiés se taisent là où la réception n est pas configurée", () => {
+  // Mesuré en production le 7 novembre, avant correction : quatre-vingt-dix
+  // passages en quatre-vingt-dix minutes, tous en erreur, tous pour la même
+  // cause. Une erreur répétée mille quatre cent quarante fois par jour ne
+  // signale rien et masque la première vraie panne.
+  const RETENTION = readFileSync(new URL("../app/api/cron/web-lead-retention/route.js", import.meta.url), "utf8");
+  for (const [nom, source] of [["file", CRON], ["conservation", RETENTION]]) {
+    assert.match(source, /webLeadIngestConfigured\(\)/, `${nom} : le passage ne regarde pas si la réception est configurée`);
+    assert.match(source, /inerte/, `${nom} : l état inerte n est pas nommé dans la réponse`);
+    // L'ordre compte : l'autorisation d'abord, pour qu'un appel non signé
+    // n'apprenne rien de la configuration de l'environnement.
+    assert.ok(
+      source.indexOf("cronAuthorized") < source.indexOf("webLeadIngestConfigured()"),
+      `${nom} : l état de configuration est révélé avant le contrôle du secret`
+    );
+  }
+});
+
 test("le cron est protégé par un secret et refuse son absence", () => {
   // Le contrôle est partagé avec les autres traitements planifiés, pour qu'il
   // n'existe qu'une seule règle d'accès à maintenir. La route doit s'en

@@ -1,5 +1,6 @@
 import { CRON_UNAUTHORIZED, cronAuthorized } from "../../../lib/cron-auth";
 import { WEB_LEAD_RETENTION } from "../../../lib/web-lead-retention";
+import { webLeadIngestConfigured } from "../../../lib/web-lead-ingest";
 import { serviceRequest, serviceRoleConfigured } from "../../../lib/supabase-server";
 
 /**
@@ -31,6 +32,13 @@ async function rpc(nom, body) {
 async function run(request) {
   if (!cronAuthorized(request)) {
     return Response.json(CRON_UNAUTHORIZED, { status: 401 });
+  }
+  // Même raison que pour la file : sans trousseau, aucune demande n'a pu
+  // entrer, et il n'y a donc rien à conserver ni à effacer. Le passage est
+  // quotidien et non pas minuté, mais une erreur quotidienne reste une erreur
+  // qui ne dit rien.
+  if (!webLeadIngestConfigured()) {
+    return Response.json({ ok: true, inerte: "réception non configurée sur cet environnement" });
   }
   if (!serviceRoleConfigured()) {
     return Response.json({ error: "SUPABASE_SERVICE_ROLE_KEY manquant." }, { status: 503 });
