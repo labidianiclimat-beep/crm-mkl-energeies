@@ -730,6 +730,45 @@ qui est correct — aucun script du navigateur ne l'importe, le serveur seul le
 lit. Et `/etc/nginx/sites-available/` conserve deux fichiers inactifs,
 `mkl-energies.new` et une sauvegarde horodatée, qu'aucun lien n'active.
 
+### Épreuve réelle du 7 novembre 2026 à 23 h 08 — une demande fictive, puis effacée
+
+La chaîne est prouvée de bout en bout, sur le site en production, avec **une**
+demande manifestement fictive portant des marqueurs Google Ads.
+
+**Ce qui a été capturé**, exactement ce qu'il faut pour comparer les régies :
+
+```
+attribution     gclid, utm_source=google, utm_medium=cpc,
+                utm_campaign, landingPath=/photovoltaique.html,
+                referrerHost=www.google.com, capturedAt
+premier contact  utm_source, utm_medium, landingPath, capturedAt
+```
+
+Les deux modèles d'attribution sont donc enregistrés côte à côte, comme prévu :
+premier contact et dernier contact. Le `referrerHost` a été déduit de l'en-tête
+`Referer` et correctement distingué du domaine du site lui-même.
+
+**Et surtout, ce qui ne s'est pas produit.** Une tâche est entrée dans la file
+locale au statut « en attente », avec **zéro tentative d'envoi** — rien n'a été
+transmis, et rien n'a été perdu : c'est précisément le rôle de la file.
+Contrôlé côté CRM dans le même temps : **0 événement web, 246 prospects et
+4212 clients inchangés, 0 origine écrite**. Aucune erreur au journal, aucun
+verrou laissé derrière.
+
+**Nettoyage vérifié.** La demande et la tâche ont été retirées une par une, par
+identifiant, avec une assertion refusant d'écrire si le retrait n'était pas
+d'exactement un enregistrement. L'empreinte du fichier des demandes est
+redevenue `c251994b6b7fb313`, **identique à celle d'avant l'essai**, et le
+fichier de file a disparu comme il était. Aucune trace de l'essai nulle part
+dans `data/`. Aucune preuve de consentement n'a été écrite — la conformité est
+sur « OFF » — et aucun courriel n'est parti : le site n'en envoie que pour la
+réinitialisation du mot de passe administrateur.
+
+La sauvegarde d'avant l'essai contient les coordonnées de douze demandes
+réelles. Son dossier `/home/ubuntu/archives-env/` était en 0755 ; il est passé
+en 0700 et le fichier en 0600. Il est hors de la racine web, et `/archives-env/`
+répond 404.
+
 ### Simulation du 7 novembre 2026 — ce que le déploiement écrirait
 
 **Dix fichiers, aucune suppression, aucun orphelin.** Sept nouveaux modules dans
