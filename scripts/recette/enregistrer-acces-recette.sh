@@ -65,7 +65,14 @@ for HOTE in aws-1-eu-west-1.pooler.supabase.com aws-0-eu-west-1.pooler.supabase.
     RETENU="$HOTE"
     break
   fi
-  printf 'refusé\n'
+  # Ne jamais écrire « refusé » ici : à ce stade l échec porte presque toujours
+  # sur l adresse, pas sur le mot de passe, et la confusion est immédiate pour
+  # qui regarde la fenêtre. Le motif exact figure dans le journal.
+  if grep -q "tenant/user .* not found" "$JOURNAL" 2>/dev/null; then
+    printf 'ce serveur n héberge pas ce projet\n'
+  else
+    printf 'sans réponse utilisable, voir le journal\n'
+  fi
 done
 
 if [ -z "$RETENU" ]; then
