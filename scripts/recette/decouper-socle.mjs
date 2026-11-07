@@ -22,7 +22,10 @@ import { RACINE, fichierSql, migrations, recreerBase } from "../pg-test/lib.mjs"
 
 const ORDRE = resolve(RACINE, "scripts/recette/ordre-applique.txt");
 const LOTS = resolve(RACINE, "scripts/recette/lots");
-const TAILLE_CIBLE = 400 * 1024;
+// Une fois les brochures allégées, le socle tient en 276 Ko. Des lots de
+// 60 Ko en donnent cinq : assez petits pour qu'un échec nomme précisément son
+// lot, assez gros pour ne pas multiplier les étapes.
+const TAILLE_CIBLE = Number(process.env.MKL_TAILLE_LOT || 60 * 1024);
 
 const CINQ = [
   "20261102_google_oauth_states.sql",
@@ -32,6 +35,29 @@ const CINQ = [
   "20261105_search_path_hardening.sql",
 ];
 
+// Les brochures Aquarea pèsent 2,3 Mo des 2,6 Mo du socle, et ce poids est
+// entièrement du PDF encodé en base64. Leur seul apport structurel est la
+// table ci-dessous : tout le reste est un `truncate` suivi d'inserts de
+// morceaux. Pour éprouver des migrations de schéma, la table suffit, et la
+// recette n'a aucun besoin du contenu des brochures.
+//
+// L'allègement est donc volontaire et nommé, pas un oubli : il ramène le
+// socle à une taille applicable par l'outil officiel Supabase, sans mot de
+// passe de base ni manipulation manuelle. Le compte de tables est préservé.
+const BROCHURES = [
+  "20261015_aquarea_m_brochure_1.sql",
+  "20261015_aquarea_m_brochure_2.sql",
+  "20261015_aquarea_m_brochure_3.sql",
+  "20261015_aquarea_m_brochure_4.sql",
+];
+
+const STRUCTURE_BROCHURES = `-- Structure seule des brochures Aquarea : les morceaux de PDF encodés en
+-- base64 sont écartés du socle de recette. Voir decouper-socle.mjs.
+create table if not exists public._aquarea_brochure_part (
+  n integer primary key,
+  part text not null
+);`;
+
 const noms = readFileSync(ORDRE, "utf8")
   .split("\n")
   .map(ligne => ligne.trim())
@@ -40,11 +66,22 @@ const noms = readFileSync(ORDRE, "utf8")
 
 const sources = new Map(migrations().map(item => [item.nom, item.sql]));
 
+// Une seule des quatre brochures porte la table ; les autres disparaissent.
+let structurePosee = false;
+for (const nom of BROCHURES) {
+  if (!sources.has(nom)) continue;
+  sources.set(nom, structurePosee ? "" : STRUCTURE_BROCHURES);
+  structurePosee = true;
+}
+
+// Les brochures vidées de leurs données n'ont plus rien à appliquer.
+const retenus = noms.filter(nom => (sources.get(nom) || "").trim().length > 0);
+
 // Regroupement glouton, en respectant l'ordre et les frontières de fichiers.
 const lots = [];
 let courant = [];
 let poids = 0;
-for (const nom of noms) {
+for (const nom of retenus) {
   const sql = sources.get(nom);
   if (courant.length > 0 && poids + sql.length > TAILLE_CIBLE) {
     lots.push(courant);
@@ -73,7 +110,8 @@ const fiches = lots.map((lot, index) => {
   return { nom, migrations: lot, octets: corps.length };
 });
 
-console.log(`${noms.length} migrations réparties en ${fiches.length} lots :`);
+const allegees = noms.length - retenus.length;
+console.log(`${retenus.length} migrations réparties en ${fiches.length} lots${allegees ? `, ${allegees} brochure(s) allégée(s)` : ""} :`);
 for (const fiche of fiches) {
   console.log(`  ${fiche.nom}  ${String(fiche.migrations.length).padStart(2)} migration(s)  ${String(Math.round(fiche.octets / 1024)).padStart(4)} Ko`);
 }
