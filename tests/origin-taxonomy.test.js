@@ -129,6 +129,13 @@ test("un accès direct ne revendique aucune preuve UTM", () => {
   assert.equal(classifyWebLead({ utm_medium: "organic" }).evidence, "utm");
 });
 
+test("un accès direct n est pas une demande inclassable", () => {
+  // Les deux produisent une preuve différente, et c'est ce qui permet de ne
+  // pas compter un visiteur direct parmi les demandes à qualifier.
+  assert.equal(classifyWebLead({}).evidence, "");
+  assert.equal(classifyWebLead({ utm_medium: "sms" }).evidence, "inconnu");
+});
+
 test("un canal non publicitaire et non naturel reste à qualifier", () => {
   assert.equal(classifyWebLead({ utm_medium: "email" }).category, "a_qualifier");
   assert.equal(classifyWebLead({ utm_source: "newsletter", utm_medium: "sms" }).category, "a_qualifier");

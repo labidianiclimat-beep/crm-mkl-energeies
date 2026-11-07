@@ -19,9 +19,16 @@ import { formToAppointmentRecord, formToProspectRecord } from "./prospects.js";
 
 export const WEB_LEAD_CHANNEL = "web_ingest";
 
-/** Toutes les preuves que `classifyWebLead` peut produire. */
+/**
+ * Toutes les preuves que `classifyWebLead` peut produire.
+ *
+ * La chaîne vide en fait partie, et il faut la distinguer de « inconnu » : la
+ * première dit qu'il n'y avait rien à citer, le visiteur étant arrivé en
+ * direct ; la seconde dit que le canal n'a pas pu être classé. Les confondre
+ * mélangerait des accès directs avec des demandes à qualifier.
+ */
 export const WEB_LEAD_EVIDENCE = [
-  "gclid", "gbraid", "wbraid", "fbclid", "utm", "paid_inconnu", "referrer", "inconnu",
+  "", "gclid", "gbraid", "wbraid", "fbclid", "utm", "paid_inconnu", "referrer", "inconnu",
 ];
 
 const CLICK_KINDS = ["gclid", "gbraid", "wbraid", "fbclid"];
