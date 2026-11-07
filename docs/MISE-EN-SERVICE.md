@@ -730,6 +730,36 @@ qui est correct — aucun script du navigateur ne l'importe, le serveur seul le
 lit. Et `/etc/nginx/sites-available/` conserve deux fichiers inactifs,
 `mkl-energies.new` et une sauvegarde horodatée, qu'aucun lien n'active.
 
+### Liaison configurée le 7 novembre 2026 à 23 h 15 — interrupteur toujours coupé
+
+Les trois variables sont posées dans `/var/www/mkl-energies/.env` :
+`CRM_SYNC_URL`, `CRM_SYNC_KEY_ID` à `k1`, `CRM_SYNC_SECRET` à 43 caractères.
+**`CRM_SYNC_ENABLED` n'est pas déclarée**, et c'est délibéré : le serveur le
+confirme lui-même, `crmSyncConfigured()` renvoie vrai et `crmSyncEnabled()`
+renvoie faux. Rien ne part. Sauvegarde dans
+`/home/ubuntu/archives-env/env-avant-liaison-20261107T231449Z`, fichier toujours
+en 0600, aucune erreur au journal.
+
+**Le secret est prouvé bon sans avoir ouvert l'interrupteur**, par transitivité
+et sans jamais révéler sa valeur :
+
+1. l'empreinte du secret posé sur le serveur est identique à celle du coffre,
+   `bdadc8e8a1a18a66` de part et d'autre ;
+2. le secret du coffre authentifie auprès du CRM — l'épreuve du trousseau
+   renvoie 401 sans signature, 401 avec une fausse, et 400 avec une signature
+   juste et un contenu volontairement refusé, donc après vérification de la
+   signature et sans rien créer.
+
+L'ouverture ne pourra donc pas échouer sur l'authentification. Il ne reste qu'à
+poser `CRM_SYNC_ENABLED=1` et redémarrer.
+
+Une difficulté technique mérite d'être notée pour la prochaine fois : écrire le
+secret par SSH a d'abord échoué parce que le script Python et le secret se
+disputaient l'entrée standard — le `heredoc` occupait `stdin`, le secret
+n'arrivait jamais. Le contrôle de longueur a refusé d'écrire avant toute
+modification, donc rien n'a été abîmé. Le script est désormais transmis
+séparément de la donnée.
+
 ### Épreuve réelle du 7 novembre 2026 à 23 h 08 — une demande fictive, puis effacée
 
 La chaîne est prouvée de bout en bout, sur le site en production, avec **une**
