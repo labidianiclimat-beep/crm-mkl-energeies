@@ -190,6 +190,89 @@ order by present, a.genre, a.nom;
   process.exit(0);
 }
 
+if (process.argv.includes("--manquants")) {
+  // Même inventaire, réponse resserrée. Deux cent quatre-vingt-huit lignes
+  // dont la plupart disent « présent » noient le seul renseignement utile :
+  // ce qui manque. Le décompte des présents est conservé, car il atteste que
+  // la question a bien été posée pour chaque objet.
+  const auto = tous.filter(f => f.genre === "automatique");
+  const uniq = cle => [...new Set(auto.flatMap(f => f.objets[cle]))].sort();
+  const liste = valeurs => valeurs.map(v => `    ('${v}')`).join(",\n");
+  process.stdout.write(`with attendu(genre, nom) as (
+  select 'table', nom from (values
+${liste(uniq("tables"))}
+  ) as t(nom)
+  union all select 'colonne', nom from (values
+${liste(uniq("colonnes"))}
+  ) as t(nom)
+  union all select 'index', nom from (values
+${liste(uniq("index"))}
+  ) as t(nom)
+  union all select 'fonction', nom from (values
+${liste(uniq("fonctions"))}
+  ) as t(nom)
+), verdict as (
+  select a.genre, a.nom,
+    case
+      when a.genre = 'table' then exists (select 1 from information_schema.tables
+         where table_schema = 'public' and table_name = a.nom)
+      when a.genre = 'colonne' then exists (select 1 from information_schema.columns
+         where table_schema = 'public' and table_name = split_part(a.nom, '.', 1)
+           and column_name = split_part(a.nom, '.', 2))
+      when a.genre = 'index' then exists (select 1 from pg_indexes
+         where schemaname = 'public' and indexname = a.nom)
+      when a.genre = 'fonction' then exists (select 1 from pg_proc p
+         join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = a.nom)
+    end as present
+  from attendu a
+)
+select genre,
+  count(*) filter (where present) as presents,
+  count(*) filter (where not present) as absents,
+  coalesce(string_agg(nom, ', ' order by nom) filter (where not present), '—') as ce_qui_manque
+from verdict group by genre order by genre;
+`);
+  process.exit(0);
+}
+
+const imputer = process.argv.indexOf("--imputer");
+if (imputer !== -1) {
+  // Chemin inverse du précédent : on part des objets que la base n'a pas, et
+  // on remonte aux fichiers qui les créent. C'est la seule façon de nommer les
+  // migrations nécessaires sans en appliquer une seule, et sans se fier à un
+  // historique que la production ne tient pas.
+  const cherches = String(process.argv[imputer + 1] || "")
+    .split(",").map(s => s.trim()).filter(Boolean);
+  if (!cherches.length) {
+    console.error("  Donnez les objets manquants, séparés par des virgules.");
+    process.exit(2);
+  }
+  const attribue = new Map();
+  const orphelins = new Set(cherches);
+  for (const f of tous) {
+    const sien = [...f.objets.tables, ...f.objets.colonnes, ...f.objets.index, ...f.objets.fonctions];
+    const pris = cherches.filter(nom => sien.includes(nom));
+    if (!pris.length) continue;
+    if (!attribue.has(f.nom)) attribue.set(f.nom, { genre: f.genre, objets: [] });
+    for (const nom of pris) { attribue.get(f.nom).objets.push(nom); orphelins.delete(nom); }
+  }
+  console.log(`\n  ${cherches.length} objet(s) manquant(s), imputés à ${attribue.size} migration(s).\n`);
+  for (const [nom, info] of [...attribue.entries()].sort()) {
+    console.log(`    ${nom}${info.genre === "automatique" ? "" : `   [${info.genre}]`}`);
+    console.log(`      ${info.objets.length} objet(s) : ${info.objets.slice(0, 6).join(", ")}${info.objets.length > 6 ? ", …" : ""}`);
+  }
+  if (orphelins.size) {
+    // Un objet qu'aucune migration ne crée vient d'ailleurs : posé à la main,
+    // ou créé par du SQL dynamique que le relevé ne sait pas lire. Le taire
+    // laisserait croire que la liste des migrations suffit.
+    console.log(`\n  ${orphelins.size} objet(s) qu'aucune migration du dépôt ne crée :`);
+    for (const nom of [...orphelins].sort()) console.log(`    ${nom}`);
+  }
+  console.log("");
+  process.exit(0);
+}
+
 const par = genre => tous.filter(f => f.genre === genre);
 const bloc = (titre, items, ligne) => {
   console.log(`\n  ${titre}`);

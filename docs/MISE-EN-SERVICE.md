@@ -266,6 +266,65 @@ cinquante avant la pose de la clé, et aucun déploiement n'a été créé depui
 16 h 31. La production fonctionne donc encore avec l'ancienne clé — ce qui est
 la raison de ne pas l'effacer tout de suite.
 
+### L'inventaire de la production, relevé le 7 novembre en lecture seule
+
+Identité confirmée avant toute lecture : projet `rzkwmwtjnwnmmcexwoov`
+« MKL Energies CRM », eu-north-1, empreinte de cluster `7662760187650847164`,
+PostgreSQL 17.6. La recette est sur un autre cluster et une autre version, 17.11.
+
+**51 objets manquent sur les 288 que les migrations du dépôt créent**, et ils
+s'imputent à cinq fichiers, sans un seul orphelin — rien dans la production ne
+vient d'ailleurs que du dépôt.
+
+| Migration | Objets manquants |
+|---|---|
+| `20261102_lead_attribution.sql` | 21 |
+| `20261102_web_lead_ingest.sql` | 15 |
+| `20261105_web_lead_idempotence.sql` | 9 |
+| `20261102_google_oauth_states.sql` | 5 |
+| `20261003_pv_simulations.sql` | 3 |
+
+S'y ajoutent `20261105_search_path_hardening.sql` et
+`20261107_search_path_pg_temp.sql`, que l'inventaire ne voit pas : elles ne
+créent rien, elles durcissent des fonctions existantes.
+
+Deux constats inattendus. **Les colonnes de tarif forfait du catalogue sont
+déjà en production** — `article_bundles.pricing_mode`, `forfait_ht`,
+`forfait_tva`, et `devis_lignes.forfait`, `forfait_montant_ht`. Elles
+manquaient encore à 15 h 39, d'où le repli écrit ce jour-là ; elles ont donc
+été posées à la main depuis. Le repli reste utile, mais il ne se déclenche plus.
+Et `profiles.actions` est absente : le code lit déjà `row.actions || row.modules`,
+donc rien ne casse, mais les droits fins reposent sur les modules.
+
+À noter aussi, pour un nettoyage ultérieur : la table temporaire
+`_aquarea_brochure_part` subsiste en production, alors que les contrôles locaux
+exigent son absence.
+
+### La correction des rôles ne peut pas élever un privilège
+
+Deux raisons indépendantes, l'une mesurée, l'autre structurelle.
+
+**Mesurée.** La production compte 23 profils et neuf valeurs de rôle distinctes,
+toutes déjà canoniques : Commercial, Admin VIP, Secrétariat, Technicien,
+Prospecteur terrain, Responsable commercial, Responsable prospection,
+Responsable technique, Superadmin. `normalizeRoleLabel` est l'identité sur
+chacune. **Zéro compte sur 23 change de rôle.** Aucun profil ne porte
+« Admin second », « Administrateur », « Admin » ni « Lecture ».
+
+**Structurelle.** La correction ne touche que `profileToUiUser`, une projection
+côté navigateur. Toute écriture passe par une route qui redérive l'autorisation
+du profil de session — `requireApiSession`, puis `canInviteUsers(auth.profile)`,
+puis `assertAssignableAccess({ actorRole: auth.profile.role, … })` — et
+`isAdminVipRole` y normalise de son côté. L'interface ne peut donc que
+s'aligner sur le serveur, jamais le dépasser.
+
+**Un piège préexistant mérite d'être signalé** : dans `ROLE_ALIASES`,
+`Lecture` est associé à `Superadmin`. Un rôle dont le nom annonce une
+consultation donne les droits du second administrateur. Aucun compte ne le
+porte aujourd'hui, le serveur appliquait déjà cette équivalence, et `page.js`
+la faisait à la main — cette correction ne l'introduit pas. Mais si quelqu'un
+attribuait « Lecture » en croyant restreindre, il accorderait l'inverse.
+
 ### Retour arrière
 
 Le déploiement du site est un `rsync` : le retour arrière consiste à
