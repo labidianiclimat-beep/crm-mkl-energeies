@@ -10,6 +10,7 @@ import {
   assertAuthConfigured,
   buildSessionCookie,
   createSession,
+  destroyAllSessions,
   destroySession,
   getAdminPasswordHash,
   getSessionFromRequest,
@@ -18,6 +19,16 @@ import {
   verifyPassword,
 } from "./lib/admin-auth.mjs";
 import {
+  generateAdminPassword,
+  persistAdminPassword,
+  validateNewPassword,
+} from "./lib/admin-password.mjs";
+import {
+  getAdminResetEmail,
+  isMailConfigured,
+  sendAdminPasswordEmail,
+} from "./lib/mail.mjs";
+import {
   appendComplianceProof,
   appendOppositionToProof,
   deriveCallbackCompliance,
@@ -25,12 +36,6 @@ import {
   readProof,
   FORM_COPY_VERSION,
 } from "./lib/compliance-proof.mjs";
-import { readJsonArray as readStoredJsonArray } from "./lib/json-store.mjs";
-import { crmSyncEnabled, listCrmJobs, processCrmOutbox, requeueCrmJob } from "./lib/crm-outbox.mjs";
-import { crmSyncConfig, crmSyncConfigured, sendCrmJob } from "./lib/crm-sync.mjs";
-import { appendAppointmentRecord, appendLeadRecord, updateJsonRecords } from "./lib/lead-records.mjs";
-import { parseAttribution, parseFirstAttribution } from "./lib/lead-attribution.mjs";
-import { servePublicFile } from "./lib/public-static.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,14 +69,8 @@ const PORT = Number(process.env.PORT) || 4317;
 const ROOT = __dirname;
 const COVERS_PATH = path.join(ROOT, "data", "covers.json");
 const CATEGORY_COVERS_PATH = path.join(ROOT, "data", "category-covers.json");
-// Détournable pour les essais, afin qu'une recette n'écrive jamais dans les
-// données du site. Sans la variable, le comportement est celui d'avant.
-const DATA_DIR = process.env.MKL_DATA_DIR
-  ? path.resolve(process.env.MKL_DATA_DIR)
-  : path.join(ROOT, "data");
-const LEADS_PATH = path.join(DATA_DIR, "leads.json");
-const APPTS_PATH = path.join(DATA_DIR, "appointments.json");
-const OUTBOX_PATH = path.join(DATA_DIR, "crm-outbox.json");
+const LEADS_PATH = path.join(ROOT, "data", "leads.json");
+const APPTS_PATH = path.join(ROOT, "data", "appointments.json");
 const EXTRA_PATH = path.join(ROOT, "data", "realisations-extra.json");
 const CLIM_GALLERY_PATH = path.join(ROOT, "data", "clim-gallery.json");
 const GOOGLE_REVIEWS_PATH = path.join(ROOT, "data", "google-reviews.json");
@@ -171,6 +170,24 @@ async function watermarkPhoto(inputBuf) {
     .toBuffer();
 }
 
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".pdf": "application/pdf",
+};
+
 const HOUSING = new Set(["maison", "appartement", "pro"]);
 const INTENTS = new Set(["devis", "rappel"]);
 /** Champs PAC optionnels (landing) — ne pas confondre ownership avec status CRM */
@@ -187,6 +204,14 @@ const CLIM_SURFACE_BAND = new Set(["lt40", "40_80", "80_150", "gt150"]);
 const CLIM_EXISTING = new Set(["aucune", "a_remplacer", "a_completer"]);
 const CLIM_NEED = new Set(["rafraichir", "chauffer_rafraichir", "conseil"]);
 const CLIM_SYSTEM_HINT = new Set(["monosplit", "multisplit"]);
+const PRIVATE_FILES = new Set([
+  "leads.json",
+  "appointments.json",
+  "realisations-extra.json",
+  "clim-gallery.json",
+  "consent-proofs.jsonl",
+  "proofs",
+]);
 
 function emptyClimGallery() {
   return { version: 1, publishToSite: false, updatedAt: null, items: [] };
@@ -662,7 +687,129 @@ async function handleAdminSession(req, res) {
     json(res, 401, { ok: false, authenticated: false });
     return;
   }
-  json(res, 200, { ok: true, authenticated: true, role: session.role });
+  json(res, 200, {
+    ok: true,
+    authenticated: true,
+    role: session.role,
+    resetEmail: getAdminResetEmail(),
+    mailConfigured: isMailConfigured(),
+  });
+}
+
+/** Changer le mot de passe (session admin requise). */
+async function handleAdminChangePassword(req, res) {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const raw = await readBody(req);
+    const data = JSON.parse(raw || "{}");
+    const currentPassword = String(data.currentPassword || "");
+    const newPassword = String(data.newPassword || "");
+    const confirmPassword = String(data.confirmPassword || "");
+
+    const hash = getAdminPasswordHash();
+    if (!hash || !currentPassword || !verifyPassword(currentPassword, hash)) {
+      await new Promise((r) => setTimeout(r, 250));
+      // 400 (pas 401) pour ne pas déclencher une déconnexion côté CRM
+      json(res, 400, { ok: false, error: "Mot de passe actuel incorrect." });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      json(res, 400, { ok: false, error: "La confirmation ne correspond pas." });
+      return;
+    }
+    const check = validateNewPassword(newPassword);
+    if (!check.ok) {
+      json(res, 400, { ok: false, error: check.error });
+      return;
+    }
+    if (currentPassword === newPassword) {
+      json(res, 400, { ok: false, error: "Le nouveau mot de passe doit être différent." });
+      return;
+    }
+
+    await persistAdminPassword(ROOT, newPassword);
+    destroyAllSessions();
+    const token = createSession();
+    json(
+      res,
+      200,
+      { ok: true, message: "Mot de passe mis à jour." },
+      { cookies: [buildSessionCookie(token, req)] }
+    );
+  } catch (err) {
+    json(res, 500, { ok: false, error: String(err.message || err) });
+  }
+}
+
+/**
+ * Mot de passe oublié : génère un nouveau mot de passe et l’envoie
+ * uniquement à ADMIN_RESET_EMAIL (labidianiclimat@gmail.com).
+ */
+async function handleAdminForgotPassword(req, res) {
+  try {
+    const limited = rateLimit(req, { key: "admin-forgot", limit: 5, windowMs: 60 * 60 * 1000 });
+    if (!limited.ok) {
+      res.writeHead(429, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Retry-After": String(limited.retryAfterSec),
+        "Cache-Control": "no-store",
+      });
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: "Trop de demandes. Réessayez dans une heure.",
+        })
+      );
+      return;
+    }
+
+    // Corps optionnel — on n’accepte pas d’adresse libre (anti-abus).
+    await readBody(req).catch(() => "");
+
+    if (!isMailConfigured()) {
+      json(res, 503, {
+        ok: false,
+        error:
+          "L’envoi d’e-mail n’est pas encore configuré sur le serveur (SMTP). Contactez le support technique.",
+        resetEmail: getAdminResetEmail(),
+      });
+      return;
+    }
+
+    const newPassword = generateAdminPassword(16);
+    // Envoyer d’abord : si l’e-mail échoue, l’ancien mot de passe reste valide.
+    try {
+      await sendAdminPasswordEmail(newPassword);
+    } catch (err) {
+      console.error("[admin-forgot] envoi e-mail échoué:", err?.message || err);
+      json(res, 502, {
+        ok: false,
+        error:
+          "Impossible d’envoyer l’e-mail pour le moment. Réessayez plus tard ou changez le mot de passe une fois connecté.",
+        resetEmail: getAdminResetEmail(),
+      });
+      return;
+    }
+
+    await persistAdminPassword(ROOT, newPassword);
+    destroyAllSessions();
+
+    json(res, 200, {
+      ok: true,
+      message: `Un nouveau mot de passe a été envoyé à ${getAdminResetEmail()}.`,
+      resetEmail: getAdminResetEmail(),
+    });
+  } catch (err) {
+    json(res, 500, { ok: false, error: String(err.message || err) });
+  }
+}
+
+function safePath(urlPath) {
+  const decoded = decodeURIComponent((urlPath || "/").split("?")[0]);
+  const cleaned = decoded === "/" ? "/index.html" : decoded;
+  const full = path.normalize(path.join(ROOT, cleaned));
+  if (!full.startsWith(ROOT)) return null;
+  return full;
 }
 
 async function readBody(req) {
@@ -707,7 +854,18 @@ function parsePersonName(data) {
 }
 
 async function readJsonArray(filePath) {
-  return readStoredJsonArray(filePath);
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeJsonArray(filePath, rows) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(rows, null, 2)}\n`, "utf8");
 }
 
 async function handleSaveCovers(req, res) {
@@ -850,14 +1008,6 @@ async function handleCreateLead(req, res) {
     const callbackChecked = Boolean(data.callbackChecked);
     const pagePath = String(data.pagePath || "").trim().slice(0, 200);
     const uiActionLabel = String(data.uiActionLabel || "").trim().slice(0, 160);
-    const attribution = parseAttribution(data.attribution || data, {
-      headerReferer: req.headers.referer || "",
-      pagePath,
-      ownHost: req.headers.host || "",
-    });
-    const attributionFirst = parseFirstAttribution(data.attributionFirst, {
-      ownHost: req.headers.host || "",
-    });
     const complianceOn = isComplianceEnabled();
 
     if (complianceOn) {
@@ -919,8 +1069,6 @@ async function handleCreateLead(req, res) {
       ...pacParse.fields,
       ...pvParse.fields,
       ...climParse.fields,
-      attribution,
-      attributionFirst,
       ...(complianceOn
         ? {
             callbackChecked: intent === "rappel" ? true : callbackChecked,
@@ -938,12 +1086,11 @@ async function handleCreateLead(req, res) {
         : {}),
     };
 
-    await appendLeadRecord(DATA_DIR, LEADS_PATH, OUTBOX_PATH, lead);
+    const leads = await readJsonArray(LEADS_PATH);
+    leads.unshift(lead);
+    await writeJsonArray(LEADS_PATH, leads);
 
     console.log(`[lead] ${lead.intent} — ok`);
-    // Transmission lancée sans attendre : la réponse au visiteur ne dépend
-    // jamais de la disponibilité du CRM.
-    runCrmOutbox().catch(() => {});
     json(res, 201, {
       ok: true,
       id: lead.id,
@@ -974,129 +1121,37 @@ async function handlePatchLead(req, res, id) {
   try {
     const raw = await readBody(req);
     const data = JSON.parse(raw);
-    if (data.status != null && !["nouveau", "contacte", "traite"].includes(String(data.status || ""))) {
-      json(res, 400, { ok: false, error: "Statut invalide" });
-      return;
-    }
-
-    let missing = false;
-    let saved = null;
-    await updateJsonRecords(DATA_DIR, LEADS_PATH, async (leads) => {
-      const idx = leads.findIndex((l) => l.id === id);
-      if (idx < 0) {
-        missing = true;
-        return leads;
-      }
-      const patch = { updatedAt: new Date().toISOString() };
-      if (data.status != null) patch.status = String(data.status);
-      if (isComplianceEnabled() && data.opposition === true) {
-        patch.opposition = true;
-        patch.callbackCompliance = "opposition";
-        patch.oppositionAt = new Date().toISOString();
-        if (leads[idx].proofId) {
-          await appendOppositionToProof(ROOT, leads[idx].proofId, String(data.oppositionNote || ""));
-        }
-      }
-      leads[idx] = { ...leads[idx], ...patch };
-      saved = leads[idx];
-      return leads;
-    });
-    if (missing || !saved) {
+    const leads = await readJsonArray(LEADS_PATH);
+    const idx = leads.findIndex((l) => l.id === id);
+    if (idx < 0) {
       json(res, 404, { ok: false, error: "Lead introuvable" });
       return;
     }
-    json(res, 200, { ok: true, lead: enrichLeadCompliance(saved) });
+
+    const patch = { updatedAt: new Date().toISOString() };
+    if (data.status != null) {
+      const status = String(data.status || "");
+      if (!["nouveau", "contacte", "traite"].includes(status)) {
+        json(res, 400, { ok: false, error: "Statut invalide" });
+        return;
+      }
+      patch.status = status;
+    }
+
+    if (isComplianceEnabled() && data.opposition === true) {
+      patch.opposition = true;
+      patch.callbackCompliance = "opposition";
+      patch.oppositionAt = new Date().toISOString();
+      if (leads[idx].proofId) {
+        await appendOppositionToProof(ROOT, leads[idx].proofId, String(data.oppositionNote || ""));
+      }
+    }
+
+    leads[idx] = { ...leads[idx], ...patch };
+    await writeJsonArray(LEADS_PATH, leads);
+    json(res, 200, { ok: true, lead: enrichLeadCompliance(leads[idx]) });
   } catch (err) {
     json(res, 500, { ok: false, error: String(err.message || err) });
-  }
-}
-
-async function handleListCrmOutbox(_req, res) {
-  try {
-    const jobs = await listCrmJobs(OUTBOX_PATH);
-    const leads = await readJsonArray(LEADS_PATH);
-    const appointments = await readJsonArray(APPTS_PATH);
-    const leadById = new Map(leads.map((row) => [row.id, row]));
-    const appointmentById = new Map(appointments.map((row) => [row.id, row]));
-    json(res, 200, {
-      ok: true,
-      syncEnabled: syncActive(),
-      syncConfigured: crmSyncConfigured(),
-      jobs: jobs.map((job) => {
-        const person = job.kind === "appointment" ? appointmentById.get(job.sourceId) : leadById.get(job.sourceId);
-        return {
-          ...job,
-          label: person?.name || "",
-          intent: job.kind === "appointment" ? "rdv" : person?.intent || "",
-        };
-      }),
-    });
-  } catch (err) {
-    json(res, 500, { ok: false, error: String(err.message || err) });
-  }
-}
-
-/**
- * La liaison CRM demande deux conditions : le drapeau d’activation et une
- * configuration complète. Un drapeau activé sans secret ne doit rien tenter.
- */
-function syncActive() {
-  return crmSyncEnabled() && crmSyncConfigured();
-}
-
-/** Retrouve la demande d’origine, seule source du contenu transmis. */
-async function crmJobRecord(job) {
-  const rows = await readJsonArray(job.kind === "appointment" ? APPTS_PATH : LEADS_PATH);
-  return rows.find((row) => row.id === job.sourceId) || null;
-}
-
-let crmSyncRunning = false;
-
-/**
- * Passage de la file. Jamais deux passages en parallèle : deux envois
- * simultanés de la même tâche produiraient deux tentatives inutiles.
- */
-async function runCrmOutbox() {
-  if (crmSyncRunning || !syncActive()) return { ran: false, sent: 0, failed: 0 };
-  crmSyncRunning = true;
-  try {
-    // À l'intérieur du try : une erreur ici laisserait sinon le verrou fermé
-    // et éteindrait la synchronisation jusqu'au redémarrage.
-      // Le jeton de contournement n'est pas un réglage du CRM mais de Vercel :
-      // sans lui, « Vercel Authentication » renvoie 401 avant que la requête
-      // n'atteigne la route d'ingestion, et la signature n'est jamais lue.
-      const { endpoint, keyId, secret, bypassToken } = crmSyncConfig();
-      const result = await processCrmOutbox(DATA_DIR, OUTBOX_PATH, {
-        enabled: true,
-        async send(job) {
-          const record = await crmJobRecord(job);
-          return sendCrmJob(job, { record, endpoint, keyId, secret, bypassToken });
-        },
-      });
-    if (result.sent || result.failed) {
-      console.log(`[crm-sync] transmis ${result.sent} — échecs ${result.failed}`);
-    }
-    return result;
-  } catch (err) {
-    // Le message peut citer une adresse technique, jamais le secret.
-    console.error(`[crm-sync] passage interrompu : ${String(err.message || err)}`);
-    return { ran: false, sent: 0, failed: 0 };
-  } finally {
-    crmSyncRunning = false;
-  }
-}
-
-async function handleRequeueCrmJob(_req, res, jobId) {
-  try {
-    const job = await requeueCrmJob(DATA_DIR, OUTBOX_PATH, jobId);
-    if (!job) {
-      json(res, 404, { ok: false, error: "Tâche introuvable." });
-      return;
-    }
-    runCrmOutbox().catch(() => {});
-    json(res, 200, { ok: true, job });
-  } catch (err) {
-    json(res, 409, { ok: false, error: String(err.message || err) });
   }
 }
 
@@ -1143,14 +1198,6 @@ async function handleCreateAppointment(req, res) {
     let meetingType = String(data.meetingType || "telephone").trim();
     if (!["telephone", "physique"].includes(meetingType)) meetingType = "telephone";
     const pagePath = String(data.pagePath || "/rdv.html").trim().slice(0, 200);
-    const attribution = parseAttribution(data.attribution || data, {
-      headerReferer: req.headers.referer || "",
-      pagePath,
-      ownHost: req.headers.host || "",
-    });
-    const attributionFirst = parseFirstAttribution(data.attributionFirst, {
-      ownHost: req.headers.host || "",
-    });
     const complianceOn = isComplianceEnabled();
 
     if (!person.ok) {
@@ -1192,6 +1239,7 @@ async function handleCreateAppointment(req, res) {
     // PAC / PV / clim : fusionner sans écraser les champs déjà posés
     const qualifyFields = { ...pacParse.fields, ...pvParse.fields, ...climParse.fields };
 
+    const appointments = await readJsonArray(APPTS_PATH);
     // Même créneau autorisé plusieurs fois (équipe commerciale)
     const agenda = buildAgenda([], AGENDA_BUSINESS_DAYS);
     const day = agenda.find((d) => d.date === date);
@@ -1242,14 +1290,17 @@ async function handleCreateAppointment(req, res) {
       project,
       note,
       ...qualifyFields,
-      attribution,
-      attributionFirst,
       ...(proof
         ? { proofId: proof.proofId, formCopyVersion: FORM_COPY_VERSION }
         : {}),
     };
 
-    const mirror = {
+    appointments.unshift(appointment);
+    await writeJsonArray(APPTS_PATH, appointments);
+
+    // Aussi dans le CRM leads — sans event generate_lead (côté client uniquement book_appointment)
+    const leads = await readJsonArray(LEADS_PATH);
+    leads.unshift({
       id: leadMirrorId,
       createdAt,
       status: "nouveau",
@@ -1269,8 +1320,6 @@ async function handleCreateAppointment(req, res) {
       appointmentTime: time,
       meetingType,
       ...qualifyFields,
-      attribution,
-      attributionFirst,
       ...(proof
         ? {
             proofId: proof.proofId,
@@ -1279,16 +1328,10 @@ async function handleCreateAppointment(req, res) {
             callbackChecked: false,
           }
         : {}),
-    };
-    await appendAppointmentRecord(
-      DATA_DIR,
-      { appointmentsPath: APPTS_PATH, leadsPath: LEADS_PATH, outboxPath: OUTBOX_PATH },
-      appointment,
-      mirror
-    );
+    });
+    await writeJsonArray(LEADS_PATH, leads);
 
     console.log(`[rdv] ${date} ${time} — ok`);
-    runCrmOutbox().catch(() => {});
     json(res, 201, {
       ok: true,
       id: appointment.id,
@@ -1311,27 +1354,19 @@ async function handlePatchAppointment(req, res, id) {
       json(res, 400, { ok: false, error: "Statut invalide" });
       return;
     }
-    let missing = false;
-    let saved = null;
-    await updateJsonRecords(DATA_DIR, APPTS_PATH, (appointments) => {
-      const idx = appointments.findIndex((a) => a.id === id);
-      if (idx < 0) {
-        missing = true;
-        return appointments;
-      }
-      appointments[idx] = {
-        ...appointments[idx],
-        status,
-        updatedAt: new Date().toISOString(),
-      };
-      saved = appointments[idx];
-      return appointments;
-    });
-    if (missing || !saved) {
+    const appointments = await readJsonArray(APPTS_PATH);
+    const idx = appointments.findIndex((a) => a.id === id);
+    if (idx < 0) {
       json(res, 404, { ok: false, error: "RDV introuvable" });
       return;
     }
-    json(res, 200, { ok: true, appointment: saved });
+    appointments[idx] = {
+      ...appointments[idx],
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonArray(APPTS_PATH, appointments);
+    json(res, 200, { ok: true, appointment: appointments[idx] });
   } catch (err) {
     json(res, 500, { ok: false, error: String(err.message || err) });
   }
@@ -1839,7 +1874,52 @@ async function handleGoogleReviews(_req, res) {
 }
 
 async function serveStatic(req, res) {
-  await servePublicFile(req, res, ROOT);
+  const filePath = safePath(req.url || "/");
+  if (!filePath) {
+    res.writeHead(403).end("Forbidden");
+    return;
+  }
+
+  const base = path.basename(filePath);
+  const underProofs =
+    filePath === path.join(ROOT, "data", "proofs") ||
+    filePath.startsWith(path.join(ROOT, "data", "proofs") + path.sep);
+  if (PRIVATE_FILES.has(base) || underProofs) {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Not found");
+    return;
+  }
+
+  try {
+    let statPath = filePath;
+    let stat = await fs.stat(statPath).catch(() => null);
+    if (stat?.isDirectory()) {
+      statPath = path.join(statPath, "index.html");
+      stat = await fs.stat(statPath);
+    }
+    const ext = path.extname(statPath).toLowerCase();
+    const data = await fs.readFile(statPath);
+    // Images / polices : cache long (les URLs sont versionnées ?v=…).
+    // HTML : pas de cache. CSS/JS : cache court (aussi versionnés en prod).
+    // JSON data : no-store.
+    let cacheControl = "no-cache";
+    if (ext === ".json") cacheControl = "no-store";
+    else if ([".png", ".jpg", ".jpeg", ".webp", ".svg", ".ico", ".woff2", ".gif", ".pdf"].includes(ext)) {
+      cacheControl = "public, max-age=31536000, immutable";
+    } else if ([".css", ".js", ".mjs"].includes(ext)) {
+      cacheControl = "public, max-age=86400";
+    } else if (ext === ".html") {
+      cacheControl = "no-cache";
+    }
+    res.writeHead(200, {
+      "Content-Type": MIME[ext] || "application/octet-stream",
+      "Cache-Control": cacheControl,
+    });
+    res.end(data);
+  } catch {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Not found");
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1869,6 +1949,14 @@ const server = http.createServer(async (req, res) => {
     await handleAdminSession(req, res);
     return;
   }
+  if (req.method === "POST" && pathname === "/api/admin/forgot-password") {
+    await handleAdminForgotPassword(req, res);
+    return;
+  }
+  if (req.method === "POST" && pathname === "/api/admin/change-password") {
+    await handleAdminChangePassword(req, res);
+    return;
+  }
 
   // —— Écritures / lectures admin (CRM) — 401 si non authentifié ——
   if (req.method === "POST" && pathname === "/api/covers") {
@@ -1885,21 +1973,6 @@ const server = http.createServer(async (req, res) => {
     if (!requireAdmin(req, res)) return;
     await handleListLeads(req, res);
     return;
-  }
-  if (req.method === "GET" && pathname === "/api/crm-outbox") {
-    if (!requireAdmin(req, res)) return;
-    await handleListCrmOutbox(req, res);
-    return;
-  }
-  if (req.method === "POST" && pathname.startsWith("/api/crm-outbox/") && pathname.endsWith("/retry")) {
-    const id = decodeURIComponent(
-      pathname.slice("/api/crm-outbox/".length, pathname.length - "/retry".length)
-    );
-    if (id && !id.includes("/")) {
-      if (!requireAdmin(req, res)) return;
-      await handleRequeueCrmJob(req, res, id);
-      return;
-    }
   }
   if (req.method === "PATCH" && pathname.startsWith("/api/leads/")) {
     const id = pathname.slice("/api/leads/".length);
@@ -2045,25 +2118,10 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(405).end("Method not allowed");
 });
 
-/**
- * Passage périodique de la file. L’intervalle ne retient pas le processus à
- * l’arrêt, et reste inoffensif quand la liaison est éteinte : `runCrmOutbox`
- * sort immédiatement.
- */
-const CRM_SYNC_INTERVAL_MS = 60_000;
-const crmSyncTimer = setInterval(() => {
-  runCrmOutbox().catch(() => {});
-}, CRM_SYNC_INTERVAL_MS);
-crmSyncTimer.unref();
-
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`MKL Énergies → http://localhost:${PORT}`);
   console.log(`CRM          → http://localhost:${PORT}/admin.html`);
   console.log(
     `Compliance   → ${isComplianceEnabled() ? "ON (ENABLE_CALLBACK_COMPLIANCE)" : "OFF (défaut)"}`
   );
-  console.log(
-    `Synchro CRM  → ${syncActive() ? "ON" : crmSyncEnabled() ? "OFF (configuration incomplète)" : "OFF (CRM_SYNC_ENABLED)"}`
-  );
-  if (syncActive()) runCrmOutbox().catch(() => {});
 });

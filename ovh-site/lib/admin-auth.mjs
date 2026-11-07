@@ -135,6 +135,11 @@ export function destroySession(token) {
   if (token) sessions.delete(token);
 }
 
+/** Invalide toutes les sessions (changement / reset de mot de passe). */
+export function destroyAllSessions() {
+  sessions.clear();
+}
+
 export function getSessionFromRequest(req) {
   const cookies = parseCookies(req);
   const raw = cookies[COOKIE_NAME];

@@ -147,6 +147,13 @@ const state = {
   toast: "",
   toastOk: false,
   loginError: "",
+  loginInfo: "",
+  loginMode: "login", // login | forgot
+  forgotBusy: false,
+  passwordFormError: "",
+  passwordFormOk: "",
+  resetEmail: "labidianiclimat@gmail.com",
+  mailConfigured: false,
   leads: [],
   leadsLoading: false,
   leadsFilter: "all",
@@ -154,8 +161,6 @@ const state = {
   complianceEnabled: false,
   appointments: [],
   appointmentsLoading: false,
-  crmJobs: [],
-  crmJobsLoading: false,
   proofModal: null,
   climGallery: { version: 1, publishToSite: false, updatedAt: null, items: [] },
   climGalleryCategories: [
@@ -282,6 +287,7 @@ function showToast(message, ok = true) {
 
 async function login(password) {
   state.loginError = "";
+  state.loginInfo = "";
   try {
     const res = await apiFetch("/api/admin/login", {
       method: "POST",
@@ -296,12 +302,67 @@ async function login(password) {
     }
     sessionStorage.setItem(SESSION_KEY, "1");
     state.loginError = "";
+    state.loginMode = "login";
     await Promise.all([loadCovers(), loadCategoryCovers(), loadRealisationsList()]);
     render();
     loadLeads();
   } catch {
     state.loginError = "Connexion impossible. Vérifiez que le serveur tourne.";
     render();
+  }
+}
+
+async function requestForgotPassword() {
+  state.loginError = "";
+  state.loginInfo = "";
+  state.forgotBusy = true;
+  render();
+  try {
+    const res = await apiFetch("/api/admin/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.resetEmail) state.resetEmail = data.resetEmail;
+    if (!res.ok || !data.ok) {
+      state.loginError = data.error || "Envoi impossible.";
+      return;
+    }
+    state.loginInfo =
+      data.message ||
+      `Un nouveau mot de passe a été envoyé à ${state.resetEmail}.`;
+    state.loginMode = "login";
+  } catch {
+    state.loginError = "Envoi impossible. Vérifiez que le serveur tourne.";
+  } finally {
+    state.forgotBusy = false;
+    render();
+  }
+}
+
+async function changePassword({ currentPassword, newPassword, confirmPassword }) {
+  state.passwordFormError = "";
+  state.passwordFormOk = "";
+  try {
+    const res = await apiFetch("/api/admin/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      state.passwordFormError = data.error || "Modification impossible.";
+      render();
+      return false;
+    }
+    state.passwordFormOk = data.message || "Mot de passe mis à jour.";
+    render();
+    return true;
+  } catch {
+    state.passwordFormError = "Modification impossible. Réessayez.";
+    render();
+    return false;
   }
 }
 
@@ -324,6 +385,8 @@ async function restoreSession() {
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.authenticated) {
       sessionStorage.setItem(SESSION_KEY, "1");
+      if (data.resetEmail) state.resetEmail = data.resetEmail;
+      state.mailConfigured = !!data.mailConfigured;
       return true;
     }
   } catch {
@@ -334,6 +397,35 @@ async function restoreSession() {
 }
 
 function renderLogin() {
+  if (state.loginMode === "forgot") {
+    root.innerHTML = `
+      <div class="login">
+        <form class="login__card" id="forgot-form">
+          <img class="login__logo" src="assets/logo-mkl-energies.png?v=officiel" alt="MKL Énergies" />
+          <h1>Mot de passe oublié</h1>
+          <p>Un nouveau mot de passe sera envoyé à<br /><strong>${escapeHtml(state.resetEmail)}</strong></p>
+          <p class="login__error" role="alert">${escapeHtml(state.loginError)}</p>
+          ${state.loginInfo ? `<p class="login__info" role="status">${escapeHtml(state.loginInfo)}</p>` : ""}
+          <button class="btn btn--primary btn--block" type="submit" ${state.forgotBusy ? "disabled" : ""}>
+            ${state.forgotBusy ? "Envoi…" : "Envoyer le mot de passe"}
+          </button>
+          <button type="button" class="login__link" id="back-login">← Retour à la connexion</button>
+        </form>
+      </div>`;
+    root.querySelector("#forgot-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (state.forgotBusy) return;
+      requestForgotPassword();
+    });
+    root.querySelector("#back-login")?.addEventListener("click", () => {
+      state.loginMode = "login";
+      state.loginError = "";
+      state.loginInfo = "";
+      render();
+    });
+    return;
+  }
+
   root.innerHTML = `
     <div class="login">
       <form class="login__card" id="login-form">
@@ -342,8 +434,10 @@ function renderLogin() {
         <p>Leads, agenda &amp; réalisations</p>
         <label class="login__label" for="password">Mot de passe</label>
         <input class="login__input" id="password" name="password" type="password" autocomplete="current-password" required autofocus />
-        <p class="login__error" role="alert">${state.loginError}</p>
+        <p class="login__error" role="alert">${escapeHtml(state.loginError)}</p>
+        ${state.loginInfo ? `<p class="login__info" role="status">${escapeHtml(state.loginInfo)}</p>` : ""}
         <button class="btn btn--primary btn--block" type="submit">Se connecter</button>
+        <button type="button" class="login__link" id="forgot-link">Mot de passe oublié ?</button>
       </form>
     </div>`;
 
@@ -361,6 +455,65 @@ function renderLogin() {
         btn.textContent = "Se connecter";
       }
     });
+  });
+  root.querySelector("#forgot-link")?.addEventListener("click", () => {
+    state.loginMode = "forgot";
+    state.loginError = "";
+    state.loginInfo = "";
+    render();
+  });
+}
+
+function renderComptePanel(panel) {
+  panel.innerHTML = `
+    <div class="main__head">
+      <div>
+        <h1>Compte &amp; mot de passe</h1>
+        <p>Modifiez le mot de passe du CRM. En cas d’oubli, un nouveau mot de passe peut être envoyé à <strong>${escapeHtml(state.resetEmail)}</strong>.</p>
+      </div>
+    </div>
+    <section class="upload-card">
+      <h2>Changer le mot de passe</h2>
+      <form id="change-password-form" class="password-form">
+        <label>Mot de passe actuel
+          <input name="currentPassword" type="password" autocomplete="current-password" required />
+        </label>
+        <label>Nouveau mot de passe
+          <input name="newPassword" type="password" autocomplete="new-password" minlength="12" required />
+        </label>
+        <label>Confirmer le nouveau mot de passe
+          <input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required />
+        </label>
+        <p class="upload-hint">Minimum 12 caractères. Les autres sessions admin seront déconnectées.</p>
+        <p class="login__error" role="alert">${escapeHtml(state.passwordFormError)}</p>
+        ${state.passwordFormOk ? `<p class="login__info" role="status">${escapeHtml(state.passwordFormOk)}</p>` : ""}
+        <button type="submit" class="btn btn--primary" id="change-password-btn">Enregistrer le nouveau mot de passe</button>
+      </form>
+    </section>
+    <section class="upload-card">
+      <h2>Mot de passe oublié</h2>
+      <p class="upload-hint">Sur l’écran de connexion, utilisez « Mot de passe oublié ? » pour recevoir un nouveau mot de passe sur <strong>${escapeHtml(state.resetEmail)}</strong>.</p>
+    </section>
+  `;
+
+  panel.querySelector("#change-password-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const btn = panel.querySelector("#change-password-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Enregistrement…";
+    }
+    const ok = await changePassword({
+      currentPassword: String(fd.get("currentPassword") || ""),
+      newPassword: String(fd.get("newPassword") || ""),
+      confirmPassword: String(fd.get("confirmPassword") || ""),
+    });
+    if (ok) e.currentTarget.reset();
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Enregistrer le nouveau mot de passe";
+    }
   });
 }
 
@@ -1516,100 +1669,6 @@ function readFileAsDataUrl(file) {
   });
 }
 
-const CRM_JOB_STATUS = {
-  pending: "En attente",
-  error: "Échec",
-  failed: "Abandonnée",
-  sent: "Transmis",
-};
-
-async function loadCrmOutbox() {
-  state.crmJobsLoading = true;
-  render();
-  try {
-    const res = await apiFetch("/api/crm-outbox");
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "File illisible");
-    state.crmJobs = data.jobs || [];
-    state.crmSyncEnabled = Boolean(data.syncEnabled);
-    state.crmSyncConfigured = Boolean(data.syncConfigured);
-  } catch (err) {
-    state.crmJobs = [];
-    if (isLoggedIn()) showToast(err.message || "Impossible de charger la file", false);
-  } finally {
-    state.crmJobsLoading = false;
-    render();
-  }
-}
-
-async function retryCrmJob(jobId) {
-  try {
-    const res = await apiFetch(`/api/crm-outbox/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "Reprise impossible");
-    showToast("Tâche remise en file", true);
-  } catch (err) {
-    showToast(err.message || "Reprise impossible", false);
-  }
-  await loadCrmOutbox();
-}
-
-function renderCrmOutboxPanel(panel) {
-  const retryable = state.crmJobs.filter((job) => job.status === "error" || job.status === "failed").length;
-  const syncNotice = state.crmSyncEnabled
-    ? "Les demandes sont transmises au CRM dès leur réception, et réessayées en cas de coupure."
-    : state.crmSyncConfigured
-      ? "Envoi vers le CRM désactivé. Les demandes restent en file, aucune n’est perdue."
-      : "Aucun envoi vers le CRM : la liaison n’est pas encore configurée. Les demandes restent en file.";
-  panel.innerHTML = `
-    <header class="page-head">
-      <div>
-        <h1>Synchronisation CRM</h1>
-        <p>${escapeHtml(syncNotice)}</p>
-      </div>
-      <button type="button" class="btn btn--ghost" id="refresh-sync" ${state.crmJobsLoading ? "disabled" : ""}>
-        ${state.crmJobsLoading ? "Chargement…" : "Actualiser"}
-      </button>
-    </header>
-    <p class="compliance-disclaimer">${retryable ? `${retryable} tâche${retryable > 1 ? "s" : ""} à reprendre.` : "Les nouvelles demandes restent d’abord enregistrées sur le site."}</p>
-    <div class="leads-list" id="sync-list"></div>
-  `;
-  const list = panel.querySelector("#sync-list");
-  if (state.crmJobsLoading && state.crmJobs.length === 0) {
-    list.innerHTML = `<div class="panel coming"><p>Chargement…</p></div>`;
-  } else if (state.crmJobs.length === 0) {
-    list.innerHTML = `<div class="panel coming"><h2>Aucune tâche</h2><p>Les prochaines demandes apparaîtront ici, sans quitter le site.</p></div>`;
-  } else {
-    list.innerHTML = state.crmJobs
-      .map((job) => {
-        const when = job.status === "error" && job.nextRetryAt ? ` · nouvel essai ${formatDate(job.nextRetryAt)}` : "";
-        const detail = job.status === "sent"
-          ? `Transmise le ${formatDate(job.sentAt)}`
-          : job.lastError
-            ? escapeHtml(job.lastError)
-            : "Pas encore transmise.";
-        const canRetry = job.status === "error" || job.status === "failed";
-        return `
-        <article class="lead-card">
-          <div class="lead-card__top">
-            <div>
-              <h3>${escapeHtml(job.label || "Demande")}</h3>
-              <p class="lead-card__meta">${escapeHtml(job.kind === "appointment" ? "Rendez-vous" : "Demande")} · ${escapeHtml(job.intent || "")}</p>
-            </div>
-            <span class="lead-status">${escapeHtml(CRM_JOB_STATUS[job.status] || job.status)}</span>
-          </div>
-          <p class="lead-card__msg">${detail}${escapeHtml(when)} · essais ${Number(job.attempts) || 0}</p>
-          ${canRetry ? `<button type="button" class="btn btn--ghost" data-retry="${escapeHtml(job.id)}">Reprendre</button>` : ""}
-        </article>`;
-      })
-      .join("");
-  }
-  panel.querySelector("#refresh-sync")?.addEventListener("click", loadCrmOutbox);
-  for (const button of panel.querySelectorAll("[data-retry]")) {
-    button.addEventListener("click", () => retryCrmJob(button.dataset.retry));
-  }
-}
-
 function renderShell() {
   root.innerHTML = `
     <div class="shell">
@@ -1621,13 +1680,13 @@ function renderShell() {
         <nav class="sidebar__nav" aria-label="Sections">
           <button type="button" class="nav-item ${state.view === "leads" ? "is-active" : ""}" data-view="leads">Leads</button>
           <button type="button" class="nav-item ${state.view === "agenda" ? "is-active" : ""}" data-view="agenda">Agenda RDV</button>
-          <button type="button" class="nav-item ${state.view === "sync" ? "is-active" : ""}" data-view="sync">Synchro CRM</button>
           <button type="button" class="nav-item ${state.view === "realisations" ? "is-active" : ""}" data-view="realisations">Réalisations</button>
           <button type="button" class="nav-item ${state.view === "clim-gallery" ? "is-active" : ""}" data-view="clim-gallery">Galerie clim</button>
           <button type="button" class="nav-item ${state.view === "contenu" ? "is-active" : ""}" data-view="contenu">
             Contenu
             <span class="nav-item__soon">Bientôt</span>
           </button>
+          <button type="button" class="nav-item ${state.view === "compte" ? "is-active" : ""}" data-view="compte">Compte</button>
         </nav>
         <div class="sidebar__foot">
           <a class="sidebar__link" href="index.html" target="_blank" rel="noopener">Voir le site →</a>
@@ -1651,10 +1710,6 @@ function renderShell() {
         loadAppointments();
         return;
       }
-      if (next === "sync" && state.crmJobs.length === 0 && !state.crmJobsLoading) {
-        loadCrmOutbox();
-        return;
-      }
       if (next === "clim-gallery" && state.climGallery.items.length === 0 && !state.climGalleryLoading) {
         loadClimGallery();
         return;
@@ -1668,10 +1723,11 @@ function renderShell() {
   if (state.view === "realisations") renderRealisationsPanel(panel);
   else if (state.view === "leads") renderLeadsPanel(panel);
   else if (state.view === "agenda") renderAgendaPanel(panel);
-  else if (state.view === "sync") renderCrmOutboxPanel(panel);
   else if (state.view === "clim-gallery") renderClimGalleryPanel(panel);
   else if (state.view === "contenu") {
     comingSoon(panel, "Contenu", "Textes, téléphone, horaires — bientôt modifiables ici.");
+  } else if (state.view === "compte") {
+    renderComptePanel(panel);
   } else {
     comingSoon(panel, "Paramètres", "Mot de passe, utilisateurs, intégrations.");
   }
