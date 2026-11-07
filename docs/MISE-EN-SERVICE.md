@@ -377,10 +377,25 @@ chronologique la respecte, et les trois autres sont indépendantes :
 | Ordre | Migration | Ce qu'elle apporte |
 |---|---|---|
 | 1 | `20261003_pv_simulations.sql` | 3 objets, sans lien avec l'attribution |
-| 2 | `20261102_google_oauth_states.sql` | 5 objets — **et elle répare au passage la connexion Google Calendar**, dont le code réclame déjà cette table absente |
+| 2 | `20261102_google_oauth_states.sql` | 5 objets — **et elle rétablit les nouvelles connexions Google Calendar** (voir ci-dessous) |
 | 3 | `20261102_web_lead_ingest.sql` | 15 objets, la file des demandes |
 | 4 | `20261102_lead_attribution.sql` | 21 objets, l'attribution et les colonnes d'origine |
 | 5 | `20261105_web_lead_idempotence.sql` | 9 objets, étend les précédentes |
+
+**Une panne latente, découverte en préparant cette étape.** Relier un nouveau
+compte Google Calendar est **impossible en production aujourd'hui**.
+`app/api/google/calendar/connect/route.js` enregistre d'abord son jeton à usage
+unique dans `google_oauth_states`, table que la production n'a pas ; l'écriture
+échoue et la route répond 503 « Connexion Google indisponible. » Le refus est
+propre et voulu — un parcours dont le retour serait invérifiable ne doit pas
+commencer — mais il est total.
+
+Les comptes **déjà** reliés ne sont pas concernés : leurs jetons vivent dans
+`google_calendar_accounts`, qui existe. La synchronisation en cours continue.
+
+Cette panne est antérieure au déploiement de ce soir : les trois fichiers
+concernés sont identiques à ceux qui tournaient avant. La migration n° 2 la
+lève, et c'est la raison de la placer tôt, avant même la file des demandes.
 
 **2. Les trois variables, puis un déploiement.** `WEB_LEAD_KEYRING`,
 `WEB_LEAD_ORGANIZATION_ID`, `WEB_LEAD_RETENTION_DAYS` sur Production. Une
