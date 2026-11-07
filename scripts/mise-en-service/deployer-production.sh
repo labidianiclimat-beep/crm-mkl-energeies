@@ -35,7 +35,7 @@ NODE=${NODE:-/Applications/Cursor.app/Contents/Resources/app/resources/helpers/n
 ACTION=""
 for ARG in "$@"; do
   case "$ARG" in
-    --controles|--deployer|--retour) ACTION="$ARG" ;;
+    --controles|--deployer|--retour|--eprouver) ACTION="$ARG" ;;
     dpl_*) CIBLE_RETOUR="$ARG" ;;
     *) printf '\n  Option inconnue : %s\n\n' "$ARG" >&2; exit 2 ;;
   esac
@@ -167,6 +167,17 @@ case "$ACTION" in
 --controles)
   controles || exit 1
   printf '  Pour déployer :\n    sh scripts/mise-en-service/deployer-production.sh --deployer\n\n'
+  ;;
+
+--eprouver)
+  # L épreuve seule, en lecture. Elle sert deux fois : avant, pour constater ce
+  # que la production porte aujourd hui et vérifier que l épreuve sait
+  # distinguer ; après, pour confirmer le résultat sans redéployer.
+  epreuve_production
+  CODE=$?
+  [ "$CODE" -eq 0 ] && printf '  Production conforme.\n\n' \
+    || printf '  %s point(s) non conforme(s). Aucune action n a été prise.\n\n' "$CODE"
+  exit "$CODE"
   ;;
 
 --retour)
