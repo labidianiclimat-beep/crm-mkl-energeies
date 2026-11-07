@@ -756,6 +756,14 @@ test("le prix de vente saisi en TTC est enregistré en HT", () => {
   assert.match(field, /Saisir le prix en HT ou TTC/);
   assert.match(picker, /<ArticleSellPriceField/);
   assert.match(page, /<ArticleSellPriceField/);
-  assert.match(picker, /disabled=\{saving \|\| \(!accessoryKind && !brandName\)\}/);
-  assert.doesNotMatch(picker, /!selectedBrand\?\.id/);
+  // La création reste bloquée pendant l'enregistrement, et tant qu'on n'a ni
+  // type d'accessoire ni marque. La condition sur la marque a changé de nature :
+  // une marque seulement saisie ne suffit plus, il faut une marque enregistrée.
+  // C'est la règle du catalogue — composition à partir de l'existant, pas de
+  // saisie libre — et l'ancienne assertion, qui interdisait `selectedBrand?.id`,
+  // la contredisait désormais.
+  assert.match(picker, /disabled=\{saving \|\| \(!accessoryKind && !selectedBrand\?\.id\)\}/);
+  // Un bouton inerte sans explication est un cul-de-sac : la raison du blocage
+  // doit être affichée, avec le moyen d'en sortir.
+  assert.match(picker, /Cette marque n’est pas enregistrée\. Créez-la dans l’onglet Marques\./);
 });

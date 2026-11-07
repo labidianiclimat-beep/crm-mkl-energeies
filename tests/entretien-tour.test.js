@@ -52,11 +52,19 @@ test("un appel signale la voie, le code postal ou la commune manquants", () => {
     "../app/components/commercial-agenda.js",
     "../app/components/agenda-home.js",
     "../app/components/sav-module.js",
-    "../app/components/commercial-rdv-table.js",
     "../app/components/prospect-dispatch-board.js",
   ]) {
     assert.match(readFileSync(new URL(file, import.meta.url), "utf8"), /AddressCallNotice|ClientPhoneLink/);
   }
+  // Le tableau des rendez-vous commerciaux ne figure plus dans cette liste :
+  // sa colonne « Tél. » a été retirée volontairement, et les trois pièces ont
+  // bougé ensemble — l'en-tête, la cellule, et la grille CSS passée de douze à
+  // onze colonnes. Le numéro reste joignable depuis la fiche client, où le
+  // test ci-dessus l'exige. Ce contrôle vérifie que la colonne n'y revient pas
+  // à moitié : une cellule sans en-tête décalerait toute la grille.
+  const rdv = readFileSync(new URL("../app/components/commercial-rdv-table.js", import.meta.url), "utf8");
+  assert.doesNotMatch(rdv, /<span>Tél\.<\/span>/);
+  assert.doesNotMatch(rdv, /ClientPhoneLink/);
   assert.doesNotMatch(screen, /window\.confirm\(`Voulez-vous mettre à jour/);
 });
 

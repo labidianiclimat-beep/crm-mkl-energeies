@@ -39,7 +39,17 @@ export function profileToUiUser(row = {}) {
     lastName: split.lastName,
     email,
     identifier: email,
-    role: row.role || "",
+    // Le rôle est normalisé ici, et pas seulement côté serveur. Les contrôles
+    // d'accès des routes comparent `normalizeRoleLabel(profile.role)` à
+    // « Superadmin », tandis que l'interface compare le libellé brut : un
+    // compte enregistré « Admin second » obtenait donc ses droits du serveur
+    // mais les perdait à l'écran. Le contournement écrit à la main dans
+    // `commercial-agenda.js`, qui cite « Admin second » à côté de
+    // « Superadmin », en était le symptôme.
+    // La chaîne vide est préservée telle quelle : `normalizeRoleLabel` renvoie
+    // « Commercial » pour une entrée vide, ce qui attribuerait un rôle à un
+    // compte qui n'en a pas.
+    role: row.role ? normalizeRoleLabel(row.role) : "",
     manager: row.manager || "",
     modules: sanitizeGrantedModules(Array.isArray(row.modules) ? row.modules : [], { role: row.role }),
     actions: extractGrantedActions(row.actions || row.modules),

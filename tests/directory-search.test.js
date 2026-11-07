@@ -113,10 +113,29 @@ test("les recherches client proposent de creer une fiche", () => {
   assert.doesNotMatch(thermal, /onClientCreated/);
   assert.match(thermal, /allowCreate=\{false\}/);
   assert.match(thermal, /ExistingClientGate/);
-  assert.match(thermal, /variant="inline"/);
-  assert.match(thermal, /BanSuggestionList/);
-  assert.equal((thermal.match(/<label>Nom/g) || []).length, 1);
-  assert.equal((thermal.match(/<label>Prénom/g) || []).length, 1);
+  // L'étude thermique ne passe plus `variant="inline"` : la mise en page est
+  // descendue dans le composant, qui n'expose plus ce réglage. Ce qui doit
+  // encore être garanti est ailleurs, et c'est plus important : que l'interdit
+  // de création posé par la page soit réellement transmis au champ de
+  // recherche. Sans ce relais, `allowCreate={false}` ne serait que décoratif,
+  // et l'étude thermique rouvrirait la création de fiches par la fenêtre.
+  const connect = readFileSync(new URL("../app/components/recipient-connect.js", import.meta.url), "utf8");
+  assert.match(connect, /export function ExistingClientGate\(\{[^}]*allowCreate = false/);
+  assert.match(connect, /<RecipientConnect[^>]*allowCreate=\{allowCreate\}/);
+  // L'étude thermique n'autocomplète plus d'adresse, et c'est normal : elle
+  // n'en saisit plus aucune. La fiche client étant obligatoire — création
+  // interdite — l'adresse en est reprise et figée par `frozenRecipient`.
+  // C'est une garantie plus forte que la précédente : l'adresse portée sur un
+  // document ne peut pas être retapée à la volée.
+  assert.match(thermal, /frozenRecipient/);
+  assert.doesNotMatch(thermal, /name="address"/);
+  // Ces deux comptes valaient un, pour interdire le doublon de champs d'état
+  // civil. Ils valent zéro désormais, et pour la même raison que l'adresse :
+  // l'identité vient de la fiche choisie, elle n'est plus ressaisie. L'intention
+  // d'origine est donc mieux servie qu'avant, et le contrôle devient : aucune
+  // ressaisie, jamais plus d'un champ si l'un devait revenir.
+  assert.ok((thermal.match(/<label>Nom/g) || []).length <= 1);
+  assert.ok((thermal.match(/<label>Prénom/g) || []).length <= 1);
   assert.match(agenda, /kind="prospect"/);
   assert.doesNotMatch(agenda, /onClientCreated/);
   assert.match(wizard, /<DirectorySearch/);
