@@ -98,11 +98,21 @@ eprouver_solar() {
   done
 }
 
+retirer() {
+  # $1 = nom. « --environment » n'est pas une élégance mais une sûreté : le
+  # client le dit lui-même, « sans cette option, la variable est retirée de
+  # TOUS ses environnements ». Une suppression visant la recette aurait donc
+  # pu emporter celle de la production si la forme positionnelle, déclarée
+  # obsolète, cessait un jour d'être honorée.
+  [ -n "$CIBLE" ] || arret "Environnement cible vide : suppression refusée."
+  vercel env rm "$1" --environment "$CIBLE" --yes >/dev/null 2>&1
+}
+
 presente() {
   # $1 = nom. Le tableau de « vercel env ls » part à la fois sur la sortie
   # standard et sur celle d'erreur : les deux sont lues, sinon la réponse
   # dépendrait d'un détail d'implémentation du client.
-  vercel env ls "$CIBLE" 2>&1 | grep -q "^[[:space:]]*$1[[:space:]]"
+  vercel env ls --environment "$CIBLE" 2>&1 | grep -q "^[[:space:]]*$1[[:space:]]"
 }
 
 poser() {
@@ -119,9 +129,17 @@ poser() {
   # privés du seul message capable d'expliquer un refus. Elle est donc
   # conservée, puis purgée par sécurité de toute occurrence de la valeur
   # avant d'être montrée.
-  RAPPORT="$(printf '%s' "$2" | vercel env add "$1" "$CIBLE" 2>&1 || true)"
+  # « --environment » et non l'argument positionnel, que le client déclare
+  # obsolète. Sans cette option il « demande quand elle est omise » : sur une
+  # entrée déjà consommée par la valeur, la réponse à cette question est
+  # imprévisible. Et « --yes » écarte toute question restante.
+  RAPPORT="$(printf '%s' "$2" \
+    | vercel env add "$1" --environment "$CIBLE" --yes 2>&1 || true)"
   RAPPORT="$(printf '%s' "$RAPPORT" | sed "s|$2|«valeur masquée»|g")"
   printf '%s\n' "$RAPPORT" | sed -n 's/^/    /p'
+  # Également consigné, purgé, hors du dépôt : un diagnostic ne devrait pas
+  # dépendre de ce qui reste lisible dans une fenêtre de terminal.
+  printf '%s\n' "$RAPPORT" > "${TMPDIR:-/tmp}/mkl-rapport-$1.txt" 2>/dev/null || true
   # La propagation n'est pas instantanée côté Vercel : quelques essais
   # espacés valent mieux qu'un verdict rendu trop tôt.
   ESSAI=0
@@ -148,7 +166,7 @@ case "$ACTION" in
   printf '\n  État du renouvellement — %s\n' "$CIBLE"
   printf '  ─────────────────────────────────────\n'
   # Les deux flux, pour la raison dite dans « presente ».
-  LISTE="$(vercel env ls "$CIBLE" 2>&1 || true)"
+  LISTE="$(vercel env ls --environment "$CIBLE" 2>&1 || true)"
   for NOM in CRM_ACCESS_PIN CRM_ACCESS_PIN_PRECEDENT CRM_SESSION_SECRET \
              CRM_SESSION_SECRET_PRECEDENT GOOGLE_SOLAR_API_KEY; do
     if printf '%s' "$LISTE" | grep -q "^[[:space:]]*$NOM[[:space:]]"; then
@@ -186,7 +204,7 @@ case "$ACTION" in
   confirmer "Le nouveau code sera publié, l'ancien restant accepté." "renouveler"
 
   poser CRM_ACCESS_PIN_PRECEDENT "$ANCIEN"
-  vercel env rm CRM_ACCESS_PIN "$CIBLE" --yes >/dev/null 2>&1 || true
+  retirer CRM_ACCESS_PIN
   poser CRM_ACCESS_PIN "$NOUVEAU"
 
   printf '\n  Les variables sont posées. Elles ne prennent effet qu au prochain\n'
@@ -199,9 +217,11 @@ case "$ACTION" in
   printf '  ───────────────────────\n'
   printf '  L ancien code sera définitivement révoqué.\n'
   confirmer "CRM_ACCESS_PIN_PRECEDENT va être retirée." "refermer"
-  vercel env rm CRM_ACCESS_PIN_PRECEDENT "$CIBLE" --yes >/dev/null 2>&1 \
-    && printf '  ✓ ancien code révoqué sur %s\n' "$CIBLE" \
-    || printf '  (la variable n était pas déclarée : rien à retirer)\n'
+  if retirer CRM_ACCESS_PIN_PRECEDENT; then
+    printf '  ✓ ancien code révoqué sur %s\n' "$CIBLE"
+  else
+    printf '  (la variable n était pas déclarée : rien à retirer)\n'
+  fi
   printf '\n  Effectif au prochain déploiement.\n\n'
   ;;
 
@@ -263,7 +283,7 @@ case "$ACTION" in
   eprouver_solar "$CLE"
 
   confirmer "GOOGLE_SOLAR_API_KEY va être remplacée." "remplacer"
-  vercel env rm GOOGLE_SOLAR_API_KEY "$CIBLE" --yes >/dev/null 2>&1 || true
+  retirer GOOGLE_SOLAR_API_KEY || true
   poser GOOGLE_SOLAR_API_KEY "$CLE"
 
   # L'empreinte ne disparaît qu'une fois la production servie. La retirer dès
