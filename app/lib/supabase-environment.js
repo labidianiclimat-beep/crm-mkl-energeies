@@ -69,6 +69,7 @@ export function projectRefFromKey(value) {
 export const ENVIRONMENT_REJECTIONS = {
   KEY_PROJECT_MISMATCH: "SUPABASE_KEY_PROJECT_MISMATCH",
   PRODUCTION_FROM_PREVIEW: "SUPABASE_PRODUCTION_FROM_PREVIEW",
+  PRODUCTION_REF_MISMATCH: "SUPABASE_PRODUCTION_REF_MISMATCH",
 };
 
 /**
@@ -117,6 +118,22 @@ export function environmentVerdict({
     return { ok: false, reason: ENVIRONMENT_REJECTIONS.PRODUCTION_FROM_PREVIEW, ...detail };
   }
 
+  // Le symétrique, et il manquait. Next.js fige `NEXT_PUBLIC_SUPABASE_URL` au
+  // moment du build : la valeur devient une constante du code livré. Promouvoir
+  // un déploiement Preview en production ne reconstruit rien, donc le contrôle
+  // de build ne se rejoue pas, et la production se mettrait à écrire dans la
+  // base de recette avec la clé de production. Personne ne le verrait tout de
+  // suite : l'application fonctionnerait, sur la mauvaise base.
+  //
+  // La condition est décidable sans aucun secret, puisque
+  // `SUPABASE_PRODUCTION_REF` n'en est pas un et reste lue à l'exécution. Elle
+  // est donc bloquante : en production, viser autre chose que le projet déclaré
+  // comme production est toujours une erreur. Son absence laisse le contrôle
+  // sans effet, ce qui ne peut pas couper un CRM déjà en ligne.
+  if (environnement === "production" && refProduction && refUrl && refUrl !== refProduction) {
+    return { ok: false, reason: ENVIRONMENT_REJECTIONS.PRODUCTION_REF_MISMATCH, ...detail };
+  }
+
   const incoherent = Boolean(refUrl && refCle && refUrl !== refCle);
   if (incoherent) {
     if (environnement === "production") {
@@ -156,6 +173,14 @@ export function environmentRejectionMessage(verdict) {
     return (
       "La clé service ne désigne pas le même projet Supabase que " +
       "NEXT_PUBLIC_SUPABASE_URL. Vérifiez la portée des deux variables."
+    );
+  }
+  if (motif === ENVIRONMENT_REJECTIONS.PRODUCTION_REF_MISMATCH) {
+    return (
+      "Ce déploiement de production vise un autre projet Supabase que celui " +
+      "déclaré par SUPABASE_PRODUCTION_REF. NEXT_PUBLIC_SUPABASE_URL étant " +
+      "figée au build, il s'agit probablement d'un déploiement Preview promu " +
+      "en production : recompilez au lieu de promouvoir."
     );
   }
   return (

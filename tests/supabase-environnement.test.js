@@ -165,24 +165,47 @@ test("ce contrôle de cohérence ne demande aucune variable supplémentaire", ()
   assert.equal(verdict.reason, ENVIRONMENT_REJECTIONS.KEY_PROJECT_MISMATCH);
 });
 
-test("la production n'est jamais coupée par le garde-fou, quelle que soit la configuration", () => {
-  // Contrôle d'ensemble : on balaie les combinaisons plausibles et on exige
-  // qu'aucune ne refuse en production. C'est l'exigence de non-régression qui
-  // compte le plus ici, puisqu'un refus y signifierait une interruption.
+test("en production, seul un projet étranger déclaré refuse ; tout le reste passe", () => {
+  // Cette exigence remplace une version plus large, qui demandait qu'aucune
+  // combinaison ne refuse en production. Elle était trop forte : elle laissait
+  // passer le cas d'un déploiement Preview promu en production, où l'URL reste
+  // figée sur la recette alors que la clé devient celle de la production. Le
+  // CRM fonctionnait, sur la mauvaise base, sans que rien ne le signale.
+  //
+  // La règle retenue est la plus étroite qui ferme ce cas : en production, un
+  // refus n'a lieu que si l'URL désigne un projet **et** que la référence de
+  // production est renseignée **et** que les deux diffèrent. Toute autre
+  // combinaison reste acceptée, y compris une référence absente, de sorte que
+  // l'ajout de ce contrôle ne peut pas interrompre un CRM déjà en ligne.
   const urls = [URL_PROD, URL_TEST, "", "https://exemple.test"];
   const cles = [cleJwt(REF_PROD), cleJwt(REF_TEST), "sb_secret_quelconque", ""];
   const refs = [REF_PROD, REF_TEST, ""];
-  let combinaisons = 0;
+  let refus = 0;
+  let acceptations = 0;
   for (const projectUrl of urls) {
     for (const serviceRoleKey of cles) {
       for (const productionRef of refs) {
         const verdict = environmentVerdict({ deploymentEnv: "production", projectUrl, serviceRoleKey, productionRef });
-        assert.equal(verdict.ok, true, `refus en production pour ${projectUrl} / ${productionRef}`);
-        combinaisons += 1;
+        const refUrl = projectRefFromUrl(projectUrl);
+        const etranger = Boolean(refUrl && productionRef && refUrl !== productionRef);
+        assert.equal(
+          verdict.ok, !etranger,
+          `verdict inattendu en production pour ${projectUrl || "sans URL"} / ${productionRef || "sans référence"}`
+        );
+        if (etranger) {
+          assert.equal(verdict.reason, ENVIRONMENT_REJECTIONS.PRODUCTION_REF_MISMATCH);
+          refus += 1;
+        } else {
+          acceptations += 1;
+        }
       }
     }
   }
-  assert.equal(combinaisons, urls.length * cles.length * refs.length);
+  assert.equal(refus + acceptations, urls.length * cles.length * refs.length);
+  // La part refusée doit rester minoritaire : le garde-fou est étroit, et une
+  // dérive qui le rendrait majoritaire menacerait la production.
+  assert.ok(refus > 0, "le garde-fou ne refuse jamais rien");
+  assert.ok(acceptations > refus, "le garde-fou refuse plus qu'il n'accepte en production");
 });
 
 test("sans SUPABASE_PRODUCTION_REF, un Preview vers la production passe inaperçu", () => {
@@ -411,4 +434,49 @@ test("aucune documentation ne propose encore le secret en paramètre d'URL", () 
     }
     assert.doesNotMatch(source, /[?&]secret=/, `${nom} propose encore un secret dans une URL`);
   }
+});
+
+test("un déploiement de production visant un autre projet est refusé", () => {
+  // Cas concret : un déploiement Preview promu en production. Promouvoir ne
+  // reconstruit rien, donc `NEXT_PUBLIC_SUPABASE_URL` reste figée sur la
+  // recette, tandis que la clé service devient celle de la production. Sans ce
+  // refus, le CRM fonctionnerait en écrivant dans la base de recette.
+  const verdict = environmentVerdict({
+    deploymentEnv: "production",
+    projectUrl: URL_TEST,
+    productionRef: REF_PROD,
+  });
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, ENVIRONMENT_REJECTIONS.PRODUCTION_REF_MISMATCH);
+  assert.match(environmentRejectionMessage(verdict), /recompilez au lieu de promouvoir/i);
+});
+
+test("la production conforme reste acceptée", () => {
+  const verdict = environmentVerdict({
+    deploymentEnv: "production",
+    projectUrl: URL_PROD,
+    productionRef: REF_PROD,
+  });
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.reason, null);
+});
+
+test("sans SUPABASE_PRODUCTION_REF le nouveau refus ne peut pas couper la production", () => {
+  // Le contrôle doit rester sans effet quand la référence n'est pas renseignée,
+  // faute de quoi l'ajouter suffirait à faire tomber un CRM déjà en ligne.
+  const verdict = environmentVerdict({
+    deploymentEnv: "production",
+    projectUrl: URL_TEST,
+    productionRef: "",
+  });
+  assert.equal(verdict.ok, true);
+});
+
+test("le refus porté par Preview reste prioritaire", () => {
+  const verdict = environmentVerdict({
+    deploymentEnv: "preview",
+    projectUrl: URL_PROD,
+    productionRef: REF_PROD,
+  });
+  assert.equal(verdict.reason, ENVIRONMENT_REJECTIONS.PRODUCTION_FROM_PREVIEW);
 });

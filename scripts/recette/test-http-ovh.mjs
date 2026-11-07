@@ -40,6 +40,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 
+// Les envois valides passent par l'émetteur réel du site, et non par une
+// signature réécrite ici. C'est le seul moyen de vérifier le code qui tournera
+// vraiment sur le VPS : une réimplémentation qui s'accorde avec elle-même ne
+// prouve rien. Les requêtes volontairement fautives, elles, restent fabriquées
+// à la main, puisque l'émetteur du site refuse de les produire.
+import { buildCrmPayload, sendCrmJob } from "../../ovh-site/lib/crm-sync.mjs";
+import {
+  attributionBody,
+  mergeFirstTouch,
+  mergeLastTouch,
+  touchFromArrival,
+} from "../../ovh-site/lib/attribution-capture.mjs";
+import { parseAttribution, parseFirstAttribution } from "../../ovh-site/lib/lead-attribution.mjs";
+
 const RACINE = resolve(import.meta.dirname, "../..");
 const COFFRE = resolve(process.env.HOME, ".mkl-secrets/recette-api.env");
 const REF_RECETTE = "xqbjfytrssslnsxxdrou";
@@ -85,11 +99,10 @@ const CAS = [
     // Un seul contact : la première visite est aussi celle de la demande.
     // `touch_role` reste alors vide, et non « premier ».
     attributions: "unique|gclid",
-    attribution: {
-      gclid: "essai-gclid-fictif-001",
-      utm_source: "google", utm_medium: "cpc", utm_campaign: "PAC hiver",
-      landingPath: "/pompe-a-chaleur", referrerHost: "www.google.com",
-    },
+    arrivees: [
+      { search: "?gclid=essai-gclid-fictif-001&utm_source=google&utm_medium=cpc&utm_campaign=PAC%20hiver",
+        path: "/pompe-a-chaleur.html" },
+    ],
     contact: { name: "Dupont Fictif", email: "essai-google@exemple.test", phone: "0600000001" },
   },
   {
@@ -100,12 +113,11 @@ const CAS = [
     // Deux contacts distincts : venu d'abord par un site référent, revenu
     // par une annonce. C'est le cas qui met les deux modèles en regard.
     attributions: "premier|referrer,dernier|fbclid",
-    attribution: {
-      fbclid: "essai-fbclid-fictif-002",
-      utm_source: "facebook", utm_medium: "paid_social", utm_campaign: "PV automne",
-      landingPath: "/photovoltaique", referrerHost: "l.facebook.com",
-    },
-    attributionFirst: { referrerHost: "www.bing.com", landingPath: "/" },
+    arrivees: [
+      { referrer: "https://www.bing.com/search", path: "/" },
+      { search: "?fbclid=essai-fbclid-fictif-002&utm_source=facebook&utm_medium=paid_social&utm_campaign=PV%20automne",
+        path: "/photovoltaique.html" },
+    ],
     contact: { name: "Martin Fictif", email: "essai-facebook@exemple.test", phone: "0600000002" },
   },
   {
@@ -114,7 +126,9 @@ const CAS = [
     libelle: "Prospect Site · Site référent",
     categorie: "site_web",
     attributions: "unique|referrer",
-    attribution: { referrerHost: "www.google.com", landingPath: "/climatisation" },
+    arrivees: [
+      { referrer: "https://www.google.com/search?q=climatisation", path: "/climatisation.html" },
+    ],
     contact: { name: "Bernard Fictif", email: "essai-site@exemple.test", phone: "0600000003" },
   },
 ];
@@ -471,14 +485,79 @@ const soumissions = new Map();
 // l'ingestion ne retient que les objets `attribution`, pour le contact
 // courant, et `attributionFirst`, pour celui mémorisé par le navigateur lors
 // de la première visite.
+const HOTE_SITE = "www.mkl-energies.fr";
+
+/**
+ * Reconstitue l'attribution comme le ferait le site : capture dans le
+ * navigateur au fil des arrivées, puis relecture par le serveur OVH. Aucune
+ * valeur n'est écrite à la main, de sorte qu'une divergence entre les deux
+ * bords se voit ici plutôt qu'en production.
+ */
+function attributionDuParcours(cas) {
+  let dernier = null;
+  let premier = null;
+  let horloge = Date.now() - cas.arrivees.length * 36e5;
+  for (const arrivee of cas.arrivees) {
+    horloge += 36e5;
+    const touche = touchFromArrival({
+      search: arrivee.search || "",
+      referrer: arrivee.referrer || "",
+      path: arrivee.path || "/",
+      ownHost: HOTE_SITE,
+      now: horloge,
+    });
+    dernier = mergeLastTouch(dernier, touche, horloge);
+    premier = mergeFirstTouch(premier, touche, horloge);
+  }
+  const corps = attributionBody(dernier, premier);
+  const options = { ownHost: HOTE_SITE, now: horloge, pagePath: "/contact.html" };
+  return {
+    attribution: parseAttribution(corps.attribution || {}, options),
+    attributionFirst: parseFirstAttribution(corps.attributionFirst, options),
+  };
+}
+
+/**
+ * Envoie une demande par l'émetteur réel du site, celui qui tournera sur le
+ * VPS. `buildCrmPayload` assemble la charge à partir d'un enregistrement de
+ * demande, et `sendCrmJob` la signe et la transmet.
+ */
+async function envoyerParOvh(cas, soumission) {
+  const { attribution, attributionFirst } = attributionDuParcours(cas);
+  const job = { sourceId: soumission, kind: "lead", createdAt: new Date().toISOString() };
+  const record = {
+    createdAt: job.createdAt,
+    name: cas.contact.name,
+    phone: cas.contact.phone,
+    email: cas.contact.email,
+    message: `Demande d'essai ${cas.titre}, donnees fictives.`,
+    attribution,
+    attributionFirst,
+  };
+  // `sendCrmJob` ne rend pas de code HTTP : il lève sur tout refus et ne rend
+  // un accusé que lorsque le CRM a répondu « ok » avec un identifiant. C'est
+  // donc l'accusé qui sert de verdict, et non un code de statut.
+  try {
+    const accuse = await sendCrmJob(job, {
+      record,
+      secret: secretHmac,
+      keyId,
+      endpoint: `${BASE}${chemin}`,
+      timeoutMs: 20_000,
+    });
+    return { accuse: "reçu", duplicate: accuse.duplicate, id: accuse.id };
+  } catch (erreur) {
+    return { accuse: "refusé", duplicate: undefined, detail: erreur.message };
+  }
+}
+
 function corpsDe(cas) {
   return JSON.stringify({
     submissionId: soumissions.get(cas.cle),
     kind: "lead",
     ...cas.contact,
     message: `Demande d'essai ${cas.titre}, donnees fictives.`,
-    attribution: cas.attribution,
-    ...(cas.attributionFirst ? { attributionFirst: cas.attributionFirst } : {}),
+    ...attributionDuParcours(cas),
   });
 }
 
@@ -534,11 +613,10 @@ if (mode === "complet") {
     const corps = corpsDe(cas);
     const soumission = soumissions.get(cas.cle);
 
-    // 1. Réception. Une demande neuve rend 201, une connue rend 200.
-    const premiere = await envoyerAvecSecondeChance(() => envoyer(corps, entetesNeuves(corps)));
-    noter(`${cas.titre} — demande reçue`, 201, premiere.statut,
-      premiere.statut === 201 ? `duplicate=${premiere.charge?.duplicate}`
-        : `${premiere.charge?.error || ""} ${premiere.charge?.reason || ""}`.trim());
+    // 1. Réception, par l'émetteur réel du site.
+    const premiere = await envoyerParOvh(cas, soumission);
+    noter(`${cas.titre} — accusé de réception du CRM`, "reçu", premiere.accuse, premiere.detail || "");
+    noter(`${cas.titre} — demande tenue pour neuve`, "false", String(premiere.duplicate));
 
     // 2. Le traitement est lancé après la réponse : on attend que la fiche
     //    apparaisse réellement, au lieu de supposer un délai.
@@ -577,9 +655,9 @@ if (mode === "complet") {
 
     // 4. Relance du site : même demande, signature neuve. La file doit la
     //    reconnaître et ne rien recréer.
-    const relance = await envoyerAvecSecondeChance(() => envoyer(corps, entetesNeuves(corps)));
-    noter(`${cas.titre} — relance reconnue`, 200, relance.statut);
-    noter(`${cas.titre} — relance signalée comme connue`, "true", String(relance.charge?.duplicate));
+    const relance = await envoyerParOvh(cas, soumission);
+    noter(`${cas.titre} — relance acceptée`, "reçu", relance.accuse, relance.detail || "");
+    noter(`${cas.titre} — relance signalée comme connue`, "true", String(relance.duplicate));
 
     // 5. Décompte : une seule demande, une seule fiche, une seule attribution.
     const unicite = sql(`select

@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/verifier-config-supabase.mjs && next build && node scripts/prepare-sites-dist.mjs",
-    "build:next": "node scripts/verifier-config-supabase.mjs && next build",
-    "build:vercel": "node scripts/verifier-config-supabase.mjs && next build",
+    "build": "node scripts/verifier-config-supabase.mjs && next build && node scripts/verifier-build-grave.mjs && node scripts/prepare-sites-dist.mjs",
+    "build:next": "node scripts/verifier-config-supabase.mjs && next build && node scripts/verifier-build-grave.mjs",
+    "build:vercel": "node scripts/verifier-config-supabase.mjs && next build && node scripts/verifier-build-grave.mjs",
     "build:sites": "node scripts/verifier-config-supabase.mjs && opennextjs-cloudflare build",
     "start": "next start",
     "lint": "next lint",
@@ -14,7 +14,8 @@
     "test:ovh": "node --test ovh-site/tests/*.test.js",
     "test:pg": "node scripts/pg-test/01-migrations.mjs && node scripts/pg-test/02-garanties.mjs && node scripts/pg-test/03-search-path.mjs && node scripts/pg-test/04-oauth.mjs && node scripts/pg-test/05-origines-et-droits.mjs && node scripts/pg-test/06-retour-arriere.mjs && node scripts/pg-test/07-postgrest-oauth.mjs",
     "pg:install-postgrest": "bash scripts/pg-test/install-postgrest.sh",
-    "pg:install": "bash scripts/pg-test/install.sh"
+    "pg:install": "bash scripts/pg-test/install.sh",
+    "test:cloisonnement": "sh scripts/recette/controles-automatiques.sh"
   },
   "dependencies": {
     "geotiff": "^2.1.3",
