@@ -129,6 +129,46 @@ l'ajout : sans elle, le client *pose une question*, et sur une entrée standard
 déjà consommée par la valeur de la clé, la réponse à cette question est
 imprévisible.
 
+#### Supprimer l'ancienne clé — préparé, en attente d'accord
+
+À ne faire qu'après l'épreuve en production. Trois clés Google distinctes
+existent dans ce système, et c'est là qu'est le danger :
+
+| Identifiant | Qui l'utilise | Restreinte à |
+|---|---|---|
+| `GOOGLE_SOLAR_API_KEY` | le CRM, `app/lib/google-solar-layers.js` | Solar API |
+| `GOOGLE_PLACES_API_KEY` | **le site OVH**, `server.mjs`, pour les avis | Places API |
+| `GOOGLE_CLIENT_ID` / `_SECRET` | le CRM, Google Calendar | identifiants OAuth, pas une clé |
+
+**La clé des avis du site n'a rien à voir avec celle de l'étude solaire.** Les
+supprimer l'une pour l'autre ferait disparaître les avis Google de
+mkl-energies.fr sans que le CRM s'en aperçoive. Les identifiants OAuth du
+calendrier ne sont pas des clés d'API et ne figurent pas dans cette liste à
+supprimer.
+
+Comment reconnaître à coup sûr l'ancienne clé Solar, dans
+**APIs et services → Identifiants** :
+
+1. Sa **restriction d'API est « Solar API »** — celle des avis affiche
+   « Places API ».
+2. Sa colonne **« Dernière utilisation » s'arrête au 7 novembre**, avant
+   18 h 27 UTC. C'est l'heure du déploiement qui a mis la nouvelle clé en
+   vigueur : depuis, l'ancienne ne reçoit plus rien. Celle des avis, elle,
+   continue de servir.
+3. **Ne supprimez jamais une clé qui montre encore du trafic.** C'est le seul
+   contrôle qui ne trompe pas.
+
+Et plutôt que de supprimer d'emblée, **restreignez-la d'abord à une API qu'elle
+n'utilise pas** : la clé devient inerte, et le geste est réversible d'un clic.
+Attendez vingt-quatre heures, vérifiez qu'aucune étude photovoltaïque ni le
+site ne se plaignent, puis supprimez. Une suppression est définitive ; une
+restriction ne l'est pas.
+
+Si l'ancienne clé était supprimée par erreur à la place de la bonne, le CRM ne
+tomberait pas : l'étude retombe sur PVGIS et l'écran le dit. Le site, lui,
+perdrait ses avis silencieusement — c'est l'erreur la plus coûteuse des deux,
+et la moins visible.
+
 ### Retour arrière
 
 Pour le code d'accès : reposer l'ancienne valeur et retirer la variable
@@ -324,6 +364,52 @@ consultation donne les droits du second administrateur. Aucun compte ne le
 porte aujourd'hui, le serveur appliquait déjà cette équivalence, et `page.js`
 la faisait à la main — cette correction ne l'introduit pas. Mais si quelqu'un
 attribuait « Lecture » en croyant restreindre, il accorderait l'inverse.
+
+### La mise en service des prospects — Google Ads, Facebook, Site Internet
+
+Quatre temps, dans cet ordre, et l'ordre n'est pas négociable. Le CRM est déjà
+déployé : il porte le code d'attribution, mais inerte, faute de trousseau.
+
+**1. Les cinq migrations, sur la production.** Une seule contrainte d'ordre —
+`web_lead_ingest` crée les tables que `web_lead_idempotence` étend. L'ordre
+chronologique la respecte, et les trois autres sont indépendantes :
+
+| Ordre | Migration | Ce qu'elle apporte |
+|---|---|---|
+| 1 | `20261003_pv_simulations.sql` | 3 objets, sans lien avec l'attribution |
+| 2 | `20261102_google_oauth_states.sql` | 5 objets — **et elle répare au passage la connexion Google Calendar**, dont le code réclame déjà cette table absente |
+| 3 | `20261102_web_lead_ingest.sql` | 15 objets, la file des demandes |
+| 4 | `20261102_lead_attribution.sql` | 21 objets, l'attribution et les colonnes d'origine |
+| 5 | `20261105_web_lead_idempotence.sql` | 9 objets, étend les précédentes |
+
+**2. Les trois variables, puis un déploiement.** `WEB_LEAD_KEYRING`,
+`WEB_LEAD_ORGANIZATION_ID`, `WEB_LEAD_RETENTION_DAYS` sur Production. Une
+variable Vercel n'entre en vigueur qu'au déploiement suivant : les poser ne
+suffit pas, il faut redéployer, et c'est encore
+`deployer-production.sh --deployer` qui s'en charge.
+
+**Pourquoi les migrations d'abord.** Si le trousseau était posé avant les
+tables, la route de réception accepterait les demandes du site et échouerait à
+les enregistrer : des prospects entreraient et se perdraient. L'inverse ne
+coûte rien — les tables attendent sans rien recevoir.
+
+**Le contrôle qui dit que c'est fait** : la tâche de la minute doit répondre
+`ok` **sans** `inerte`. Tant qu'elle dit `inerte`, le trousseau n'est pas vu.
+
+**3. Le site OVH, en dernier.** Copie horodatée du serveur avant toute chose,
+`sudo cp -a /var/www/mkl-energies /var/www/mkl-energies.avant-attribution`,
+puis le déploiement. L'interrupteur d'arrêt est le retrait de `CRM_SYNC_ENABLED`
+suivi d'un redémarrage : le site continue de fonctionner, il cesse seulement
+d'envoyer. C'est pour cela qu'il passe en dernier — tant qu'il n'émet pas, rien
+n'arrive, et chaque étape précédente est vérifiable à vide.
+
+**4. Google Ads et Meta.** Rien à activer dans le CRM : les paramètres d'URL
+sont lus par `app/lib/origin-taxonomy.js` et déposés dans `lead_attribution`.
+Les événements de conversion Google Ads déjà en place ne sont pas touchés.
+
+Deux règles qui restent en vigueur pendant toute l'opération : aucune origine
+déjà enregistrée n'est modifiée, et `google_ads` ne se confond jamais avec le
+marqueur technique `google` de Google Calendar.
 
 ### Retour arrière
 
