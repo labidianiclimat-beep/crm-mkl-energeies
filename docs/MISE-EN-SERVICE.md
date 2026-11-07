@@ -455,6 +455,85 @@ là où le déploiement précédent en produisait une par minute faute de
 
 Reste l'étape 3, le site OVH, sans laquelle rien n'est encore émis.
 
+### Étape 3 préparée le 7 novembre 2026 — et elle ne pouvait pas se faire telle quelle
+
+**`deploy.sh` ne peut plus servir, et c'est heureux.** Son garde-fou exige
+`ovh-site/index.html`, qui n'existe plus depuis que les pages ont été
+rassemblées dans `site-public/` (commit `f566781`). Il refuse donc de partir, et
+n'a plus été touché depuis `73087e4`. S'il partait — si l'on « corrigeait » le
+garde-fou sans regarder plus loin — son `rsync --delete` depuis `ovh-site/`
+ferait trois dégâts d'un coup :
+
+1. il enverrait les pages dans un sous-dossier `site-public/` du serveur, alors
+   que le serveur Node les sert **à côté** de `server.mjs` : `server.mjs` fait
+   `const ROOT = __dirname` et passe ce `ROOT` à `servePublicFile` ;
+2. `--delete` effacerait donc `index.html`, `app.js` et toutes les pages à la
+   racine, celles que nginx sert réellement par `root /var/www/mkl-energies` ;
+3. il effacerait aussi `package.json` et `package-lock.json`, qui vivent sur le
+   serveur mais **ne sont pas dans le dépôt** et **ne figurent pas dans ses
+   exclusions** — après quoi le `npm install` du script lui-même n'aurait plus
+   rien à installer.
+
+Le site serait hors ligne, et pas trivialement récupérable.
+
+**La disposition a été établie sans ouvrir de session SSH**, par le seul HTTPS
+que vous avez autorisé. `/site-public/index.html` répond 404 tandis que `/`
+répond 200 : la racine distante est donc plate. Et `site-public/` est bien la
+copie fidèle du site — `/`, `/rdv.html` et `/photovoltaique.html` sont
+**identiques à l'octet** entre le dépôt et le site en ligne. Seul `app.js`
+diffère, de 24 lignes ajoutées portant toutes sur l'attribution : c'est
+exactement le changement en attente.
+
+**Une exposition en cours, indépendante de l'étape 3.** `/deploy/ovh/deploy.sh`
+et `/deploy/ovh/nginx.conf` sont **téléchargeables publiquement aujourd'hui**.
+Le serveur Node les refuse correctement — `isDeniedPublicPath` écarte
+`/deploy/` — mais nginx les sert en statique avant que Node ne les voie. Ce qui
+est ainsi donné en clair : l'utilisateur SSH et l'adresse du VPS
+(`ubuntu@148.113.149.139`), le chemin distant, l'emplacement de la clé privée,
+et la carte complète du routage. Le `nginx.conf` du dépôt corrige déjà le
+défaut, par `location ^~ /deploy/ { return 404; }` ; la configuration vivante
+est une version plus ancienne qui porte les autres refus mais pas celui-là. Les
+sondes le confirment : `/server.mjs`, `/tests/`, `/.env` et `/data/leads.json`
+répondent 404, seul `/deploy/` passe. **nginx n'est pas déployé par `deploy.sh`,
+qui ne touche qu'aux fichiers et au service** : cette correction est un geste
+manuel, à part.
+
+`/lib/attribution-capture.mjs` répond 404 alors qu'il figure dans la liste
+blanche du code. Deux causes possibles, et l'étape 3 doit traiter les deux : le
+fichier n'est pas encore sur le serveur, et la location exacte qui l'autorise
+manque à la configuration vivante.
+
+**Le nouveau script, `deploy/ovh/deployer-attribution.sh`.** Il part du constat
+inverse de son prédécesseur : le dépôt n'est pas un miroir du serveur. Il ne
+synchronise donc que ce qu'il connaît, nommément — les pages de `site-public/`
+vers la racine distante, `server.mjs`, `admin.js`, `lib/`, et les deux seules
+données publiques — et **n'efface jamais rien**. Son mode `--simuler` liste les
+fichiers présents sur le serveur et absents du dépôt pour que vous décidiez
+vous-même, au lieu de les supprimer. Quatre modes : `--controles` (dépôt et
+HTTPS seuls, aucun accès SSH), `--simuler`, `--deployer` (sauvegarde d'abord,
+interrupteur coupé), `--retour`.
+
+Les contrôles passent déjà, sauf celui qui doit échouer : il signale
+l'exposition de `/deploy/`. Rien ne sera déployé tant qu'elle dure.
+
+**L'ordre retenu**, chaque étape étant réversible :
+
+1. nginx : ajouter les refus manquants, recharger, vérifier que
+   `/deploy/ovh/deploy.sh` répond 404. Aucun fichier du site n'est touché.
+2. `--simuler`, et lire la liste des fichiers orphelins avant toute écriture.
+3. `--deployer` : copie de `/var/www/mkl-energies` vers
+   `/var/www/mkl-energies.avant-attribution`, envoi, redémarrage, épreuve —
+   **interrupteur coupé**, donc le site ne transmet encore rien.
+4. Vérifier qu'une demande réelle reste bien dans la file locale du site et que
+   la file du CRM reste à zéro.
+5. Seulement alors, poser `CRM_SYNC_URL`, `CRM_SYNC_KEY_ID`, `CRM_SYNC_SECRET`
+   — le secret étant celui du coffre, sous `k1`, déjà prouvé conforme au CRM par
+   `scripts/mise-en-service/eprouver-trousseau.mjs` — puis `CRM_SYNC_ENABLED=1`.
+
+L'interrupteur est double : `crmSyncConfigured` exige les trois variables, et
+`crmSyncEnabled` exige `CRM_SYNC_ENABLED` strictement égal à `1`. Le retirer et
+relancer le service suffit à tout arrêter.
+
 **1. Les cinq migrations, sur la production.** Une seule contrainte d'ordre —
 `web_lead_ingest` crée les tables que `web_lead_idempotence` étend. L'ordre
 chronologique la respecte, et les trois autres sont indépendantes :
