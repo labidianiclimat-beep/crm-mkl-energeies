@@ -386,6 +386,22 @@ eprouver() {
   else
     printf '    · %-44s %s\n' "/lib/attribution-capture.mjs" "code $CODE — pas encore déployé, normal"
   fi
+  # Chaque import statique de `app.js` doit se résoudre.
+  #
+  # C'est le contrôle qui manquait. Après le déploiement, `app.js` répondait
+  # 200 et chaque page aussi, mais `/lib/attribution-capture.mjs` répondait 404
+  # parce qu'une règle nginx antérieure n'autorisait dans `/lib/` que les deux
+  # modules publics de l'époque. Un import statique en échec fait échouer tout
+  # le module : le JavaScript du site était mort, sans qu'aucun code HTTP ne le
+  # dise. Les imports sont relevés dans le fichier lui-même, et non recopiés
+  # ici, pour qu'un import ajouté demain soit contrôlé sans qu'on y pense.
+  for IMPORT in $(grep -oE 'from "\./[A-Za-z0-9._/-]+"' "$RACINE/site-public/app.js" \
+                    | sed 's|from "\./||; s|"$||' | sort -u); do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$SITE/$IMPORT" || echo 000)
+    if [ "$CODE" = "200" ]; then ok "app.js importe /$IMPORT" "code $CODE"
+    else nok "app.js importe /$IMPORT" "code $CODE — le JS du site serait mort"; fi
+  done
+
   for CHEMIN in /server.mjs /data/leads.json /lib/crm-sync.mjs /.env \
                 /deploy/ovh/deploy.sh /scripts/hash-admin-password.mjs; do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$SITE$CHEMIN" || echo 000)
@@ -416,7 +432,10 @@ case "${1:-}" in
   --controles) controles ;;
   --simuler)   controles || true; simuler ;;
   --deployer)  deployer ;;
-  --eprouver)  eprouver ;;
+  # Le module de capture est maintenant en service : son absence est une
+  # anomalie, plus un état d'attente. Seul le retour arrière, qui remet la
+  # version d'avant, l'attend absent.
+  --eprouver)  eprouver apres ;;
   --retour)    retour ;;
   *)
     printf '\n  Usage :\n'

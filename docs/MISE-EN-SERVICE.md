@@ -691,6 +691,45 @@ Trois défauts trouvés au passage, qui n'avaient rien à voir avec l'attributio
   consulte. La vraie liste est dans `lib/public-static.mjs`.
 - `safePath`, `writeJsonArray` et la table `MIME` n'avaient plus d'appelant.
 
+### Étape 3 faite le 7 novembre 2026 à 23 h — et une panne invisible
+
+Le site est déployé, **interrupteur coupé** : aucune variable `CRM_SYNC_*` n'est
+déclarée, donc le double interrupteur est fermé à ses deux niveaux et rien ne
+part vers le CRM. Service actif, aucune erreur au journal, les 12 demandes et
+2 rendez-vous intacts, file locale inexistante. Sauvegarde dans
+`/var/www/mkl-energies.avant-attribution`, retour arrière par `--retour`.
+
+Dix fichiers écrits, exactement ceux annoncés par la simulation : sept nouveaux
+modules dans `lib/`, et `app.js`, `admin.js`, `server.mjs`.
+
+**Une panne a suivi immédiatement le déploiement, et c'est la plus instructive
+de la journée.** L'épreuve a signalé `/lib/attribution-capture.mjs` en 404. La
+cause n'était ni le fichier, bien arrivé, ni la liste blanche du module durci,
+qui le mentionnait : c'était une règle nginx **antérieure à ce chantier**, qui
+refuse `/lib/` par une expression à exclusions ne listant que les deux modules
+publics de l'époque.
+
+Or `app.js` importe ce module **statiquement**. Un import statique en échec fait
+échouer tout le module : le JavaScript du site était mort — formulaires, bannière
+de consentement, bascule de langue — alors que chaque page répondait 200 et que
+le service était actif. C'est la forme la plus traître de panne, et aucun
+contrôle de code HTTP ne pouvait la voir.
+
+Corrigé en ajoutant le nom à l'exclusion, avec sauvegarde horodatée, test de
+configuration et restauration automatique en cas d'échec. Vérifié ensuite : les
+cinq imports de `app.js` répondent 200, et les huit modules privés de `/lib/`
+répondent toujours 404. **Rien n'a été ouvert par mégarde.**
+
+L'épreuve relève désormais les imports **dans `app.js` lui-même** et vérifie que
+chacun se résout. Elle en a trouvé un cinquième que personne n'avait listé,
+`/i18n.js`. Vingt contrôles au lieu de quatorze. Un import ajouté demain sera
+contrôlé sans qu'on y pense.
+
+Deux remarques consignées sans rien changer : `/data/slots.js` répond 404, ce
+qui est correct — aucun script du navigateur ne l'importe, le serveur seul le
+lit. Et `/etc/nginx/sites-available/` conserve deux fichiers inactifs,
+`mkl-energies.new` et une sauvegarde horodatée, qu'aucun lien n'active.
+
 ### Simulation du 7 novembre 2026 — ce que le déploiement écrirait
 
 **Dix fichiers, aucune suppression, aucun orphelin.** Sept nouveaux modules dans
