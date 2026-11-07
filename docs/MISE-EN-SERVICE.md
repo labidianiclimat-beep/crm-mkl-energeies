@@ -538,7 +538,59 @@ des 404 de la vérification à 19 h 51. Six adresses extérieures ont bien cherc
 mais seulement aux emplacements génériques `/deploy/.env` et `/scripts/.env`,
 qui n'ont jamais existé : `45.138.12.16`, `35.228.72.191`, `213.209.159.175`,
 `80.94.95.211`, `8.231.216.167`, `8.228.85.65`. Toutes ont reçu 404. **Aucune
-n'a deviné les noms réels.**
+n'a deviné les noms réels.** Revérifié le 8 novembre : sur les deux sauvegardes
+exposées, les seuls codes 200 sont les deux miens du 7 novembre à 19 h 50 min 10
+— une minute avant que le refus prenne effet — et les 18 codes 200 sur
+`/deploy/` ou `/scripts/`, toute la fenêtre confondue, viennent tous de cette
+même adresse.
+
+#### Correction du 8 novembre : le `.env` de la racine web, lui, a bien été servi
+
+Ce que j'ai écrit ci-dessus ne vaut que pour `/deploy/` et `/scripts/`. En
+reprenant les journaux, j'ai trouvé autre chose, et je m'étais trompé en
+traitant le `.env` de la racine comme « doublement refusé » : il ne l'était pas
+à l'époque.
+
+**`/.env` a reçu 272 demandes, dont 41 réponses 200 de 434 octets**, entre le
+1er et le 4 novembre, de robots extérieurs — et aussi par ses variantes encodées
+`/%2Eenv`, `/.%65nv`, `//.env`, `/%2f.env`, `/.//.env`. Douze chemins distincts,
+tous des formes de `.env`, tous exactement 434 octets. **Aucun autre fichier du
+serveur ne fait 434 octets**, et aucun autre chemin du site ne produit cette
+taille : l'hypothèse d'une page générique est donc écartée. La sauvegarde du
+3 novembre fait 422 octets, celle du 4 novembre aussi — l'ordre de grandeur est
+celui du `.env` de cette période. Il faut donc considérer que **les secrets
+alors en service ont été lus par des tiers.**
+
+La règle qui refuse les fichiers cachés — `location ~ (^|/)\.(?!well-known…)
+{ return 404; }` — existe bien dans la configuration d'avant mes ajouts du
+7 novembre, mais elle n'était manifestement pas en place début novembre,
+puisque ces 200 ont été servis. Et le `server.mjs` d'alors ne protégeait que
+par une liste nommée où `.env` ne figurait pas.
+
+**Les secrets actuels, eux, n'ont jamais été servis.** C'est le point qui
+compte, et il est net. La dernière lecture réussie date du 4 novembre à
+17 h 59 UTC. Or les deux valeurs en service diffèrent de *toutes* les
+sauvegardes, y compris celle du 4 novembre à 22 h 25, donc postérieure à cette
+dernière lecture :
+
+```
+                       en service    3 nov 16h58   4 nov 22h25
+SESSION_SECRET         82ecc72ab9ae  89ec90795380  8f9d6088a569
+ADMIN_PASSWORD_HASH    36e73677e8e6  c507046a594b  1f4c82636079
+```
+
+Les deux ont donc changé après le 4 novembre 22 h 25, soit après la dernière
+fuite possible. La rotation reste **vivement souhaitable** — une fuite réelle a
+eu lieu, et un mot de passe choisi dans la même période mérite d'être remplacé —
+mais ce n'est pas une urgence : les valeurs vivantes sont indemnes.
+
+**La rotation reste compatible avec la liaison CRM posée depuis.** Le script a
+été écrit avant les trois variables `CRM_SYNC_*`, ce qui aurait pu les faire
+disparaître et casser la liaison au premier démarrage suivant. Vérifié : il
+parcourt les lignes une à une, ne remplace que `SESSION_SECRET=` et
+`ADMIN_PASSWORD_HASH=`, renvoie toutes les autres inchangées, et refuse d'écrire
+s'il n'en trouve pas exactement une de chaque. Les six contrôles préalables
+passent toujours, sur un fichier qui compte désormais huit variables.
 
 **Le correctif.** Sauvegarde horodatée de la configuration
 (`mkl-energies.avant-refus-20261107T195128Z`), insertion des refus avant
