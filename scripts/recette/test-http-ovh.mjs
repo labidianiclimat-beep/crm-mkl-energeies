@@ -25,6 +25,13 @@
  * rien d'autre. La marque est inscrite dans l'identifiant de soumission.
  *
  * Toutes les données envoyées sont fictives. Aucun secret n'est affiché.
+ *
+ * Liaisons de la base, relevées en lecture et non supposées :
+ *   - `web_lead_submissions.opportunity_id` désigne la fiche créée ;
+ *   - la fiche ne porte l'identifiant de soumission que dans `extra->webLead` ;
+ *   - `lead_attribution.submission_id` porte cet identifiant directement ;
+ *   - `web_lead_events.submission_pk` désigne la demande ;
+ *   - le commercial d'une fiche est `commercial_id`.
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -51,13 +58,14 @@ const mode = process.argv.includes("--nettoyer") ? "nettoyer"
   : process.argv.includes("--complet") ? "complet"
   : "signature";
 
+// Chaque résultat est imprimé dès qu'il est connu, et non à la fin : une
+// erreur en cours de route masquait tout ce qui précédait.
 const resultats = [];
 function noter(intitule, attendu, obtenu, detail = "") {
-  resultats.push({
-    intitule, attendu, obtenu,
-    verdict: String(attendu) === String(obtenu) ? "réussi" : "ÉCHOUÉ",
-    detail,
-  });
+  const verdict = String(attendu) === String(obtenu) ? "réussi" : "ÉCHOUÉ";
+  resultats.push({ intitule, attendu, obtenu, verdict, detail });
+  console.log(`  ${intitule.padEnd(52)} ${String(attendu).padEnd(16)} ${String(obtenu).padEnd(16)} ${verdict}`);
+  if (detail) console.log(`      ${detail}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -109,11 +117,32 @@ function signer({ secret, keyId, method, chemin, corps, horodatage, nonce }) {
   };
 }
 
-async function envoyer(corps, entetes) {
-  const reponse = await fetch(`${BASE}/api/web-leads`, { method: "POST", headers: entetes, body: corps });
-  let charge = null;
-  try { charge = await reponse.json(); } catch { /* corps non JSON */ }
-  return { statut: reponse.status, charge };
+// Chaque requête est bornée dans le temps. Sans cela, un blocage attend la
+// limite d'undici, cinq minutes, et le test entier s'arrête sans rien dire.
+// Un dépassement devient ici un statut 0, c'est-à-dire un échec lisible.
+async function envoyer(corps, entetes, limiteMs = 20_000) {
+  try {
+    const reponse = await fetch(`${BASE}/api/web-leads`, {
+      method: "POST", headers: entetes, body: corps,
+      signal: AbortSignal.timeout(limiteMs),
+    });
+    let charge = null;
+    try { charge = await reponse.json(); } catch { /* corps non JSON */ }
+    return { statut: reponse.status, charge };
+  } catch (erreur) {
+    const motif = erreur?.cause?.code || erreur?.name || "inconnu";
+    return { statut: 0, charge: { error: `aucune réponse en ${limiteMs / 1000} s (${motif})` } };
+  }
+}
+
+// Un dépassement de délai n'est pas un verdict : on redonne une chance avant
+// de conclure, et on le signale si la seconde tentative a suffi.
+async function envoyerAvecSecondeChance(agir) {
+  const premier = await agir();
+  if (premier.statut !== 0) return premier;
+  const second = await agir();
+  if (second.statut !== 0) second.charge = { ...second.charge, _reprise: true };
+  return second;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,11 +150,54 @@ async function envoyer(corps, entetes) {
 // ---------------------------------------------------------------------------
 
 function sql(requete) {
+  // Les retours à la ligne sont aplatis avant d'être passés au shell :
+  // `JSON.stringify` les rendrait en « \n » littéral, que sh ne réinterprète
+  // pas et que psql reçoit donc comme une barre oblique inverse suivie d'un n.
+  const plate = requete.replace(/\s+/g, " ").trim();
   const r = spawnSync("sh", ["-c",
-    `. "${RACINE}/scripts/recette/cible.sh" >/dev/null 2>&1; q ${JSON.stringify(requete)}`,
+    `. "${RACINE}/scripts/recette/cible.sh" >/dev/null 2>&1; q ${JSON.stringify(plate)}`,
   ], { encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`requête refusée : ${(r.stderr || "").trim().slice(0, 200)}`);
+  if (r.status !== 0) throw new Error(`requête refusée : ${(r.stderr || "").trim().slice(0, 300)}`);
   return (r.stdout || "").trim();
+}
+
+/**
+ * Garde-fou sur le build, et non sur l'environnement d'exécution.
+ *
+ * Next.js remplace les `process.env.NEXT_PUBLIC_*` par leur valeur **au
+ * moment de la compilation**, y compris dans le code serveur. Donner une
+ * autre adresse à l'exécution ne change donc rien : le serveur continue
+ * d'appeler celle qui est gravée dans `.next`. Un build fabriqué avec la
+ * configuration de production fait partir les requêtes vers la production,
+ * quelle que soit la variable passée au lancement.
+ *
+ * Ce contrôle lit les fragments compilés et refuse de partir si l'identifiant
+ * de production y figure. C'est le seul moyen fiable de garantir la cible.
+ */
+function garderBuild() {
+  const r = spawnSync("sh", ["-c",
+    `grep -rl ${REF_PRODUCTION} "${RACINE}/.next/server" --include=*.js 2>/dev/null | head -3`,
+  ], { encoding: "utf8" });
+  const touches = (r.stdout || "").trim();
+  if (touches) {
+    console.error("\n  Le build local porte l'identifiant du projet de PRODUCTION :");
+    for (const f of touches.split("\n")) console.error(`    ${f.replace(RACINE + "/", "")}`);
+    console.error("\n  Next.js fige les variables NEXT_PUBLIC_ à la compilation. Ce build");
+    console.error("  appellerait la production, quelle que soit l'adresse passée au");
+    console.error("  lancement. Recompilez avec la configuration de recette :");
+    console.error("    sh scripts/recette/compiler-pour-recette.sh\n");
+    process.exit(2);
+  }
+  const vu = spawnSync("sh", ["-c",
+    `grep -rl ${REF_RECETTE} "${RACINE}/.next/server" --include=*.js 2>/dev/null | head -1`,
+  ], { encoding: "utf8" });
+  if (!(vu.stdout || "").trim()) {
+    console.error("\n  Le build local ne porte aucun identifiant de projet reconnu.");
+    console.error("  Recompilez avec la configuration de recette :");
+    console.error("    sh scripts/recette/compiler-pour-recette.sh\n");
+    process.exit(2);
+  }
+  return "recette gravée dans le build";
 }
 
 function garderCible() {
@@ -181,7 +253,7 @@ function verifierCle(coffre) {
         console.error("\n  La clé déclare un autre projet que la recette : arrêt.\n");
         process.exit(2);
       }
-      return charge.ref === REF_RECETTE ? "déclarée par la clé" : "non déclarée";
+      if (charge.ref === REF_RECETTE) return "déclarée par la clé";
     } catch { /* charge illisible */ }
   }
   return "non déclarée, clé de nouvelle génération";
@@ -243,41 +315,49 @@ if (mode === "nettoyer") {
   console.log("\n  Nettoyage des seules données portant la marque du test\n");
   console.log(`  Marque : identifiant de soumission contenant « ${MARQUE} »\n`);
 
-  const avant = sql(`select count(*) from public.web_lead_submissions where submission_id like '%${MARQUE}%'`);
-  if (avant === "0") {
+  const demandes = sql(`select count(*) from public.web_lead_submissions
+      where submission_id like '%${MARQUE}%'`);
+  const fiches = sql(`select count(*) from public.commercial_opportunities
+      where extra->'webLead'->>'submissionId' like '%${MARQUE}%'`);
+  if (demandes === "0" && fiches === "0") {
     console.log("  Aucune donnée de test en base. Rien à faire.\n");
     process.exit(0);
   }
-  console.log(`  ${avant} demande(s) de test repérée(s).\n`);
+  console.log(`  ${demandes} demande(s) et ${fiches} fiche(s) de test repérée(s).\n`);
 
-  // Suppression dans l'ordre des dépendances : les lignes qui pointent vers
-  // une autre sont retirées avant celle qu'elles désignent.
+  // Ordre imposé par les clés étrangères, relevé et non supposé : tout ce qui
+  // désigne la fiche part avant elle, y compris la demande elle-même, dont la
+  // colonne `opportunity_id` la référence.
   const etapes = [
-    ["attributions", `delete from public.lead_attribution where opportunity_id in (
-        select id from public.commercial_opportunities where web_lead_submission_id in (
-          select id from public.web_lead_submissions where submission_id like '%${MARQUE}%'))`],
-    ["rendez-vous", `delete from public.commercial_appointments where web_lead_submission_id in (
+    ["attributions", `delete from public.lead_attribution
+        where submission_id like '%${MARQUE}%'`],
+    ["rendez-vous", `delete from public.commercial_appointments
+        where extra->'webLead'->>'submissionId' like '%${MARQUE}%'`],
+    ["événements de file", `delete from public.web_lead_events where submission_pk in (
         select id from public.web_lead_submissions where submission_id like '%${MARQUE}%')`],
-    ["prospects", `delete from public.commercial_opportunities where web_lead_submission_id in (
-        select id from public.web_lead_submissions where submission_id like '%${MARQUE}%')`],
-    ["événements", `delete from public.web_lead_events where submission_id in (
-        select id from public.web_lead_submissions where submission_id like '%${MARQUE}%')`],
-    ["demandes", `delete from public.web_lead_submissions where submission_id like '%${MARQUE}%'`],
+    ["demandes", `delete from public.web_lead_submissions
+        where submission_id like '%${MARQUE}%'`],
+    ["fiches prospects", `delete from public.commercial_opportunities
+        where extra->'webLead'->>'submissionId' like '%${MARQUE}%'`],
   ];
   for (const [nom, requete] of etapes) {
     sql(requete);
     console.log(`    ✓ ${nom} supprimé(e)s`);
   }
 
-  const reste = sql(`select count(*) from public.web_lead_submissions where submission_id like '%${MARQUE}%'`);
-  const prospects = sql("select count(*) from public.commercial_opportunities");
-  const demandes = sql("select count(*) from public.web_lead_submissions");
-  console.log(`\n  Restant portant la marque : ${reste}`);
-  console.log(`  Total en base : ${demandes} demande(s), ${prospects} prospect(s)`);
-  console.log("\n  Les compteurs de numérotation ne reviennent pas en arrière :");
-  console.log("  les numéros de prospect consommés restent consommés. C'est sans");
+  const resteD = sql(`select count(*) from public.web_lead_submissions
+      where submission_id like '%${MARQUE}%'`);
+  const resteF = sql(`select count(*) from public.commercial_opportunities
+      where extra->'webLead'->>'submissionId' like '%${MARQUE}%'`);
+  const total = sql(`select (select count(*) from public.web_lead_submissions) || ' demande(s), ' ||
+      (select count(*) from public.commercial_opportunities) || ' prospect(s), ' ||
+      (select count(*) from public.lead_attribution) || ' attribution(s)'`);
+  console.log(`\n  Restant portant la marque : ${resteD} demande(s), ${resteF} fiche(s)`);
+  console.log(`  Total en base : ${total}`);
+  console.log("\n  Les compteurs de numérotation ne reviennent pas en arrière : les");
+  console.log("  numéros de prospect consommés restent consommés. C'est sans");
   console.log("  conséquence sur une base de recette.\n");
-  process.exit(reste === "0" ? 0 : 1);
+  process.exit(resteD === "0" && resteF === "0" ? 0 : 1);
 }
 
 // ===========================================================================
@@ -288,21 +368,21 @@ const secretHmac = randomBytes(32).toString("hex");
 const cronSecret = randomBytes(32).toString("hex");
 const keyId = "essai-recette";
 const coffre = mode === "complet" ? (lireCoffre() || {}) : {};
-let provenanceCle = "sans objet";
 
 if (mode === "complet") {
-  provenanceCle = verifierCle(coffre);
+  const provenanceCle = verifierCle(coffre);
+  const build = garderBuild();
   const cluster = garderCible();
   console.log("\n  Test HTTP complet OVH → MKL CRM RECETTE\n");
+  console.log(`  Build local               ${build}`);
   console.log(`  Empreinte du cluster      ${cluster}, recette confirmée`);
   console.log(`  Adresse Supabase          ${coffre.MKL_RECETTE_URL}`);
   console.log(`  Appartenance de la clé    ${provenanceCle}`);
   console.log(`  Organisation              ${coffre.MKL_RECETTE_ORGANIZATION_ID}`);
-  console.log(`  Secrets HMAC et cron      engendrés à l'instant, jamais affichés\n`);
+  console.log(`  Secrets HMAC et cron      engendrés à l'instant, jamais affichés`);
 
-  const etat0 = sql(`select count(*) || ' demande(s), ' ||
-      (select count(*) from public.commercial_opportunities) || ' prospect(s)'
-      from public.web_lead_submissions`);
+  const etat0 = sql(`select (select count(*) from public.web_lead_submissions) || ' demande(s), ' ||
+      (select count(*) from public.commercial_opportunities) || ' prospect(s)'`);
   console.log(`  État de la base avant     ${etat0}\n`);
 
   console.log("  Ce mode écrit réellement dans RECETTE : trois prospects fictifs,");
@@ -315,11 +395,18 @@ if (mode === "complet") {
     console.log("\n  Renoncé. Aucune écriture.\n");
     process.exit(0);
   }
-  console.log("");
 } else {
   console.log(`\n  Mode signature, aucun secret ni aucune base`);
   console.log(`  Adresse Supabase          port fermé 127.0.0.1:9, rien ne sort`);
-  console.log(`  Secret HMAC               engendré à l'instant, jamais affiché\n`);
+  console.log(`  Secret HMAC               engendré à l'instant, jamais affiché`);
+}
+
+const occupe = spawnSync("sh", ["-c", `lsof -ti tcp:${PORT} || true`], { encoding: "utf8" });
+if ((occupe.stdout || "").trim()) {
+  console.error(`\n  Le port ${PORT} est déjà pris, probablement par un serveur laissé`);
+  console.error(`  par une exécution coupée. Libérez-le, puis relancez :`);
+  console.error(`    kill ${(occupe.stdout || "").trim().split("\n").join(" ")}\n`);
+  process.exit(1);
 }
 
 const env = environnement(secretHmac, keyId, cronSecret, coffre);
@@ -339,8 +426,21 @@ function arreter() {
   return new Promise(r => setTimeout(r, 600));
 }
 
+// Le serveur doit mourir même si le script s'arrête sur une erreur. Sans ce
+// filet, une exécution coupée laisse le port occupé, et la suivante dialogue
+// sans le savoir avec le serveur de la précédente.
+for (const signal of ["exit", "SIGINT", "SIGTERM", "uncaughtException"]) {
+  process.on(signal, raison => {
+    serveur.kill("SIGKILL");
+    if (signal === "uncaughtException") {
+      console.error(`\n  Arrêt sur erreur : ${raison?.message || raison}\n`);
+      process.exit(1);
+    }
+  });
+}
+
 if (!(await attendreServeur())) {
-  console.error("  Le serveur ne répond pas. Avez-vous lancé `npm run build` ?\n");
+  console.error("\n  Le serveur ne répond pas. Avez-vous lancé `npm run build` ?\n");
   console.error(journal.join("").slice(-800));
   await arreter();
   process.exit(1);
@@ -366,6 +466,8 @@ function entetesNeuves(corps) {
   });
 }
 
+console.log("\n  contrôle                                             attendu          obtenu           verdict\n");
+
 // --- Étage HMAC : sept requêtes fautives, dans les deux modes --------------
 
 {
@@ -390,12 +492,13 @@ function entetesNeuves(corps) {
     ["requête sans aucune signature", 401, () => envoyer(corps, { "content-type": "application/json" })],
   ];
   for (const [intitule, attendu, agir] of fautes) {
-    const r = await agir();
-    noter(`HMAC — ${intitule} refusé`, attendu, r.statut, r.charge?.error || "");
+    const r = await envoyerAvecSecondeChance(agir);
+    noter(`HMAC — ${intitule} refusé`, attendu, r.statut,
+      `${r.charge?.error || ""}${r.charge?._reprise ? " (seconde tentative)" : ""}`.trim());
   }
 
   const gros = JSON.stringify({ submissionId: `${MARQUE}-gros`, kind: "lead", phone: "0600000000", bourrage: "x".repeat(70 * 1024) });
-  const r = await envoyer(gros, entetesNeuves(gros));
+  const r = await envoyerAvecSecondeChance(() => envoyer(gros, entetesNeuves(gros)));
   noter("HMAC — corps de 70 kio refusé", 413, r.statut, r.charge?.error || "");
 }
 
@@ -403,30 +506,34 @@ function entetesNeuves(corps) {
 
 if (mode === "complet") {
   for (const cas of CAS) {
+    console.log("");
     soumissions.set(cas.cle, `${MARQUE}-${cas.cle}-${randomUUID().slice(0, 8)}`);
     const corps = corpsDe(cas);
     const soumission = soumissions.get(cas.cle);
 
     // 1. Réception. Une demande neuve rend 201, une connue rend 200.
-    const premiere = await envoyer(corps, entetesNeuves(corps));
+    const premiere = await envoyerAvecSecondeChance(() => envoyer(corps, entetesNeuves(corps)));
     noter(`${cas.titre} — demande reçue`, 201, premiere.statut,
-      `duplicate=${premiere.charge?.duplicate}`);
+      premiere.statut === 201 ? `duplicate=${premiere.charge?.duplicate}`
+        : `${premiere.charge?.error || ""} ${premiere.charge?.reason || ""}`.trim());
 
     // 2. Le traitement est lancé après la réponse : on attend que la fiche
     //    apparaisse réellement, au lieu de supposer un délai.
     let fiche = null;
     for (let i = 0; i < 30 && !fiche; i++) {
       await new Promise(r => setTimeout(r, 1000));
-      const vu = sql(`select coalesce(string_agg(o.source || '|' || o.origin_category || '|' ||
-            coalesce(o.origin_subtype, '-') || '|' || s.status, ''), '')
+      const vu = sql(`select coalesce(o.source, '') || '|' || coalesce(o.origin_category, '')
+            || '|' || coalesce(o.origin_subtype, '-') || '|' || s.status
           from public.web_lead_submissions s
-          left join public.commercial_opportunities o on o.web_lead_submission_id = s.id
+          left join public.commercial_opportunities o on o.id = s.opportunity_id
           where s.submission_id = '${soumission}'`);
-      if (vu && vu.split("|").length === 4 && !vu.startsWith("|")) fiche = vu.split("|");
+      if (vu && !vu.startsWith("|")) fiche = vu.split("|");
     }
     if (!fiche) {
-      noter(`${cas.titre} — fiche créée dans RECETTE`, "créée", "absente après 30 s",
-        "le traitement n'a pas abouti, voir le backlog");
+      const etat = sql(`select coalesce(string_agg(status || ', ' || attempts || ' tentative(s), '
+            || coalesce(last_error_code, 'sans erreur'), ' ; '), 'demande absente de la file')
+          from public.web_lead_submissions where submission_id = '${soumission}'`);
+      noter(`${cas.titre} — fiche créée dans RECETTE`, "créée", "absente après 30 s", etat);
       continue;
     }
     const [libelle, categorie, , statut] = fiche;
@@ -436,58 +543,42 @@ if (mode === "complet") {
     noter(`${cas.titre} — demande clôturée`, "done", statut);
 
     // 3. Attribution : premier contact, avec la preuve attendue.
-    const attribution = sql(`select coalesce(string_agg(a.touch_role || '|' || a.evidence, ','), 'aucune')
-        from public.lead_attribution a
-        join public.commercial_opportunities o on o.id = a.opportunity_id
-        where o.web_lead_submission_id = (
-          select id from public.web_lead_submissions where submission_id = '${soumission}')`);
+    const attribution = sql(`select coalesce(string_agg(touch_role || '|' || evidence, ','), 'aucune')
+        from public.lead_attribution where submission_id = '${soumission}'`);
     noter(`${cas.titre} — attribution du premier contact`, `premier|${cas.preuve}`, attribution);
 
     // 4. Relance du site : même demande, signature neuve. La file doit la
     //    reconnaître et ne rien recréer.
-    const relance = await envoyer(corps, entetesNeuves(corps));
-    noter(`${cas.titre} — relance reconnue`, 200, relance.statut,
-      `duplicate=${relance.charge?.duplicate}`);
+    const relance = await envoyerAvecSecondeChance(() => envoyer(corps, entetesNeuves(corps)));
+    noter(`${cas.titre} — relance reconnue`, 200, relance.statut);
     noter(`${cas.titre} — relance signalée comme connue`, "true", String(relance.charge?.duplicate));
 
     // 5. Décompte : une seule demande, une seule fiche, une seule attribution.
     const unicite = sql(`select
         (select count(*) from public.web_lead_submissions where submission_id = '${soumission}') || '/' ||
-        (select count(*) from public.commercial_opportunities where web_lead_submission_id = (
-           select id from public.web_lead_submissions where submission_id = '${soumission}')) || '/' ||
-        (select count(*) from public.lead_attribution a
-           join public.commercial_opportunities o on o.id = a.opportunity_id
-           where o.web_lead_submission_id = (
-             select id from public.web_lead_submissions where submission_id = '${soumission}'))`);
+        (select count(*) from public.commercial_opportunities
+           where extra->'webLead'->>'submissionId' = '${soumission}') || '/' ||
+        (select count(*) from public.lead_attribution where submission_id = '${soumission}')`);
     noter(`${cas.titre} — aucun doublon après relance`, "1/1/1", unicite,
       "demandes / fiches / attributions");
   }
 
   // --- Visibilité : les fiches doivent être exploitables par le CRM --------
-  const visibles = sql(`select count(*) from public.commercial_opportunities o
-      join public.web_lead_submissions s on s.id = o.web_lead_submission_id
-      where s.submission_id like '%${MARQUE}%' and o.organization_id = '${coffre.MKL_RECETTE_ORGANIZATION_ID}'`);
-  noter("Les trois fiches sont rattachées à l'organisation", "3", visibles);
+  console.log("");
+  const visibles = sql(`select count(*) from public.commercial_opportunities
+      where extra->'webLead'->>'submissionId' like '%${MARQUE}%'
+        and organization_id = '${coffre.MKL_RECETTE_ORGANIZATION_ID}'`);
+  noter("Les trois fiches rattachées à l'organisation", "3", visibles);
 
-  const sansCommercial = sql(`select count(*) from public.commercial_opportunities o
-      join public.web_lead_submissions s on s.id = o.web_lead_submission_id
-      where s.submission_id like '%${MARQUE}%' and o.assigned_to is null`);
-  noter("Les trois fiches attendent une attribution", "3", sansCommercial,
+  // `commercial_id` et non `assigned_to` : c'est le nom réel de la colonne.
+  const sansCommercial = sql(`select count(*) from public.commercial_opportunities
+      where extra->'webLead'->>'submissionId' like '%${MARQUE}%' and commercial_id is null`);
+  noter("Les trois fiches attendent un commercial", "3", sansCommercial,
     "seau non attribué, visible au dispatch");
 }
 
 await arreter();
 
-// ---------------------------------------------------------------------------
-
-console.log("  test                                                          attendu              obtenu               verdict");
-let domaine = "";
-for (const r of resultats) {
-  const d = r.intitule.split(" — ")[0];
-  if (d !== domaine) { console.log(""); domaine = d; }
-  console.log(`  ${r.intitule.padEnd(60)} ${String(r.attendu).padEnd(20)} ${String(r.obtenu).padEnd(20)} ${r.verdict}`);
-  if (r.detail) console.log(`      ${r.detail}`);
-}
 const echecs = resultats.filter(r => r.verdict !== "réussi").length;
 console.log(`\n  ${resultats.length - echecs} réussi(s), ${echecs} échoué(s)`);
 
@@ -495,5 +586,10 @@ if (mode === "complet") {
   console.log("\n  Données fictives laissées en base, marquées pour le nettoyage :");
   for (const [cle, valeur] of soumissions) console.log(`    ${cle.padEnd(12)} ${valeur}`);
   console.log("\n  Nettoyage : node scripts/recette/test-http-ovh.mjs --nettoyer\n");
+  if (echecs > 0) {
+    console.log("  Journal du serveur, dernières lignes :");
+    console.log(journal.join("").split("\n").filter(Boolean).slice(-8).map(l => `    ${l}`).join("\n"));
+    console.log("");
+  }
 }
 process.exit(echecs === 0 ? 0 : 1);
