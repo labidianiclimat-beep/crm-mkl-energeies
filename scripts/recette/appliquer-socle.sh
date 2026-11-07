@@ -19,6 +19,11 @@ PSQL="$HOME/.mkl-pgtools/bin/psql"
 RACINE="$(cd "$(dirname "$0")/../.." && pwd)"
 LOTS="$RACINE/scripts/recette/lots"
 
+# L en-tête de chaque lot liste ses migrations en « --   nom.sql », mais le
+# corps des migrations contient lui aussi des commentaires indentés de la même
+# façon. Il faut donc s arrêter à la première ligne vide, qui clôt l en-tête.
+entete() { sed -n '1,/^$/p' "$1" | grep '^--   ' || true; }
+
 oui()   { printf '\033[32m  ✓\033[0m %s\n' "$1"; }
 non()   { printf '\033[31m  ✗\033[0m %s\n' "$1"; }
 avert() { printf '\033[33m  !\033[0m %s\n' "$1"; }
@@ -105,7 +110,7 @@ case "$MODE" in
     printf '    %-10s %5s Ko   %s migration(s)\n' \
       "$(basename "$f" .sql)" \
       "$(( $(wc -c < "$f") / 1024 ))" \
-      "$(grep -c '^--   ' "$f")"
+      "$(entete "$f" | wc -l | tr -d ' ')"
   done
   [ "$n" -gt 0 ] || { non "aucun lot dans $LOTS, lancez decouper-socle.mjs"; exit 1; }
   printf '\n  Application d un lot : sh scripts/recette/appliquer-socle.sh --lot 01\n\n'
@@ -120,7 +125,7 @@ case "$MODE" in
   garde_cible
   titre "Lot socle_$NUMERO"
   printf '  migrations du lot :\n'
-  grep '^--   ' "$FICHIER_LOT" | sed 's/^--   /    /'
+  entete "$FICHIER_LOT" | sed 's/^--   /    /'
   printf '\n  avant : %s\n' "$(etat)"
 
   if ecrire "$FICHIER_LOT"; then

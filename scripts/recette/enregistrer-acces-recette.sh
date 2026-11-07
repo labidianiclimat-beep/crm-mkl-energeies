@@ -16,10 +16,19 @@ COFFRE="$HOME/.mkl-secrets"
 FICHIER="$COFFRE/recette-db.env"
 PSQL="$HOME/.mkl-pgtools/bin/psql"
 
-oui() { printf '\033[32m  ✓\033[0m %s\n' "$1"; }
-non() { printf '\033[31m  ✗\033[0m %s\n' "$1"; }
+# Journal de diagnostic, sans aucun secret : il note l étape atteinte et les
+# messages de PostgreSQL. Indispensable parce que la fenêtre de saisie n est
+# pas lisible depuis l extérieur.
+JOURNAL="/tmp/mkl-acces-recette.log"
+: > "$JOURNAL"
+chmod 600 "$JOURNAL"
+etape() { printf 'etape: %s\n' "$1" >> "$JOURNAL"; }
+
+oui() { printf '\033[32m  ✓\033[0m %s\n' "$1"; etape "ok — $1"; }
+non() { printf '\033[31m  ✗\033[0m %s\n' "$1"; etape "echec — $1"; }
 
 [ -x "$PSQL" ] || { non "psql absent de $PSQL"; exit 1; }
+etape "psql trouvé"
 
 printf '\nProjet visé : MKL CRM RECETTE (%s)\n' "$REF_RECETTE"
 printf 'Le mot de passe se trouve dans Supabase, Project Settings → Database.\n'
@@ -42,12 +51,16 @@ esac
 # Le pooler régional est le seul chemin praticable : l hôte direct
 # db.<ref>.supabase.co ne publie qu une adresse IPv6, injoignable d ici.
 # Les deux terminaisons existent selon l âge du projet ; on essaie les deux.
+# Les messages de PostgreSQL rejoignent le journal. Ils distinguent un mot de
+# passe erroné d une terminaison de pooler inadaptée, deux échecs qui se
+# ressemblent sans ce détail.
 RETENU=""
 for HOTE in aws-1-eu-west-1.pooler.supabase.com aws-0-eu-west-1.pooler.supabase.com; do
   printf '  essai de %s… ' "$HOTE"
+  printf -- '--- %s\n' "$HOTE" >> "$JOURNAL"
   if PGPASSWORD="$MDP" "$PSQL" \
       "postgresql://postgres.$REF_RECETTE@$HOTE:5432/postgres?sslmode=require" \
-      -tAc "select 1" >/dev/null 2>&1; then
+      -tAc "select 1" >/dev/null 2>>"$JOURNAL"; then
     printf 'accepté\n'
     RETENU="$HOTE"
     break
@@ -57,7 +70,9 @@ done
 
 if [ -z "$RETENU" ]; then
   non "aucune des deux terminaisons n accepte cette connexion"
-  printf '\n  Vérifiez le mot de passe, puis relancez. Rien n a été enregistré.\n\n'
+  printf '\n  Motif rapporté par PostgreSQL :\n'
+  sed 's/^/    /' "$JOURNAL"
+  printf '\n  Rien n a été enregistré. Journal : %s\n\n' "$JOURNAL"
   exit 1
 fi
 
