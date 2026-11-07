@@ -45,12 +45,51 @@ SSH="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10"
 # Les pages publiques vivent dans `site-public/` au dépôt et à la racine sur
 # le serveur. Le reste garde le même chemin de part et d'autre.
 FICHIERS_SERVEUR="server.mjs admin.js"
-DOSSIERS_SERVEUR="lib"
-DONNEES_PUBLIQUES="data/slots.js data/realisations.js"
 
+# `data/` n'est PAS déployé, et c'est une décision, pas un oubli.
+#
+# Une version de ce script y envoyait `data/slots.js` et `data/realisations.js`.
+# Or ces deux fichiers n'ont jamais été versionnés : le dépôt n'en contient que
+# des bouchons, écrits pour rendre `server.mjs` démarrable pendant les essais, et
+# tenus hors de Git précisément pour ne pouvoir jamais être déployés. Les nommer
+# ici contournait cette protection. Les déployer aurait remplacé les vrais
+# créneaux de rendez-vous par un bouchon de 59 lignes, et les 77 lignes de
+# réalisations par 20 — la page de prise de rendez-vous et le portfolio du site.
+# Et la simulation ne le montrait pas, parce qu'elle ne couvrait pas cette
+# quatrième copie.
+#
+# La source de vérité de `data/` est le serveur, pas le dépôt. Le seul fichier
+# de données que ce script déploie est `site-public/data/catalogue-radiateurs.js`,
+# qui est versionné et part avec les pages publiques.
 echo_titre() { printf '\n  %s\n\n' "$1"; }
 ok()   { printf '    ✓ %-44s %s\n' "$1" "${2:-}"; }
 nok()  { printf '    ✗ %-44s %s\n' "$1" "${2:-}"; ANOMALIE=1; }
+
+# ---------------------------------------------------------------------------
+# Les transferts, définis une seule fois.
+#
+# La simulation et le déploiement appelaient chacun leur propre suite de
+# `rsync`. Ils avaient divergé : le déploiement écrivait une quatrième copie
+# que la simulation ne montrait pas. Une simulation qui ne couvre pas tout ce
+# que le déploiement écrit est pire qu'absente, puisqu'elle rassure. Les deux
+# passent donc maintenant par ici, et ne peuvent plus différer que par les
+# drapeaux passés à rsync.
+#
+# `-c` compare les empreintes et non les horodatages : un fichier de même
+# taille mais de contenu différent serait sinon transféré sans être signalé.
+# ---------------------------------------------------------------------------
+transferts() {
+  DRAPEAUX="$1"
+  # shellcheck disable=SC2086
+  rsync $DRAPEAUX --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
+    "$RACINE/site-public/" "$HOTE:$DISTANT/"
+  # shellcheck disable=SC2086
+  (cd "$RACINE" && rsync $DRAPEAUX --no-perms --omit-dir-times -e "$SSH" \
+    $FICHIERS_SERVEUR "$HOTE:$DISTANT/")
+  # shellcheck disable=SC2086
+  rsync $DRAPEAUX --no-perms --omit-dir-times -e "$SSH" \
+    "$RACINE/lib/" "$HOTE:$DISTANT/lib/" | sed 's|^\(......... \)|\1lib/|'
+}
 
 # ---------------------------------------------------------------------------
 # Contrôles. Aucun accès SSH : uniquement le dépôt et le site en HTTPS.
@@ -185,6 +224,22 @@ FIN
     printf '  l attribution. Déployer en l état perdrait du travail.\n'
   fi
 
+  # Un fichier qui se déclare non déployable ne doit pas pouvoir partir. Les
+  # bouchons de `data/` portaient cette mention en tête et ont failli être
+  # déployés quand même, parce qu'ils étaient nommés explicitement. Le contrôle
+  # porte donc sur ce qui part réellement, et non sur une liste tenue à la main.
+  INTERDITS=$(
+    { find "$RACINE/site-public" "$RACINE/lib" -type f 2>/dev/null
+      for F in $FICHIERS_SERVEUR; do printf '%s\n' "$RACINE/$F"; done
+    } | xargs grep -l 'NE PAS DÉPLOYER' 2>/dev/null || true
+  )
+  if [ -n "$INTERDITS" ]; then
+    nok "aucun fichier marqué non déployable" "$(printf '%s\n' "$INTERDITS" | grep -c .) trouvé(s)"
+    printf '%s\n' "$INTERDITS" | sed "s|$RACINE/|           |"
+  else
+    ok "aucun fichier marqué non déployable"
+  fi
+
   echo
   [ "$ANOMALIE" = "0" ] || { printf '  Un contrôle a échoué. Rien ne sera déployé.\n\n'; return 1; }
   printf '  Contrôles réunis.\n\n'
@@ -213,16 +268,7 @@ simuler() {
   # changent, et lesquels.
   resume() {
     printf '  Ce que le déploiement écrirait réellement :\n'
-    CHANGES=$(
-      { rsync -naizc --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
-          "$RACINE/site-public/" "$HOTE:$DISTANT/"
-        # shellcheck disable=SC2086
-        (cd "$RACINE" && rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
-          $FICHIERS_SERVEUR "$HOTE:$DISTANT/")
-        rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
-          "$RACINE/lib/" "$HOTE:$DISTANT/lib/" | sed 's/ / lib\//'
-      } | grep '^<f' || true
-    )
+    CHANGES=$(transferts "-naizc" | grep '^<f' || true)
     NOUVEAUX=$(printf '%s\n' "$CHANGES" | grep -c '^<f+++' || true)
     MODIFIES=$(printf '%s\n' "$CHANGES" | grep '^<f' | grep -vc '^<f+++' || true)
     printf '%s\n' "$CHANGES" | grep '^<f+++' | awk '{print "    nouveau  " $2}' || true
@@ -234,17 +280,8 @@ simuler() {
 
   printf '  Détail, au format de rsync. Un « < » en tête annonce un transfert,\n'
   printf '  un « . » annonce qu il n y en aura pas — seule la date change.\n\n'
-  printf '  Pages publiques, de site-public/ vers la racine distante :\n'
-  rsync -naizc --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
-    "$RACINE/site-public/" "$HOTE:$DISTANT/" | sed 's/^/    /'
-
-  printf '\n  Serveur et bibliothèques :\n'
-  # shellcheck disable=SC2086
-  rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
-    $(cd "$RACINE" && printf "%s " $FICHIERS_SERVEUR) "$HOTE:$DISTANT/" 2>/dev/null \
-    | sed 's/^/    /' || true
-  rsync -naizc --no-perms --omit-dir-times -e "$SSH" \
-    "$RACINE/lib/" "$HOTE:$DISTANT/lib/" | sed 's/^/    /'
+  transferts "-naizc" | sed 's/^/    /'
+  printf '\n  Rien d autre ne part : ni data/, ni assets/, ni les dépendances.\n'
 
   # Orphelins : fichiers encore servis par le serveur que le dépôt ne connaît
   # plus. Une page retirée du site, un module renommé.
@@ -313,19 +350,12 @@ deployer() {
   printf '\n  Sauvegarde…\n'
   $SSH "$HOTE" "sudo cp -a '$DISTANT' '$SAUVEGARDE' && sudo test -f '$SAUVEGARDE/index.html' && echo '    copie faite'"
 
-  printf '\n  Envoi des pages publiques…\n'
-  # LISEZ-MOI.md est une note de travail expliquant pourquoi ce dossier
-  # existe. Déployée, elle serait servie publiquement : aucun refus nginx ne
-  # la couvre, seul « README.md » est nommé.
-  rsync -azc --no-perms --omit-dir-times --exclude 'LISEZ-MOI.md' -e "$SSH" \
-    "$RACINE/site-public/" "$HOTE:$DISTANT/"
-
-  printf '  Envoi du serveur et des bibliothèques…\n'
-  # shellcheck disable=SC2086
-  (cd "$RACINE" && rsync -azc --no-perms --omit-dir-times -e "$SSH" $FICHIERS_SERVEUR "$HOTE:$DISTANT/")
-  rsync -azc --no-perms --omit-dir-times -e "$SSH" "$RACINE/lib/" "$HOTE:$DISTANT/lib/"
-  # shellcheck disable=SC2086
-  (cd "$RACINE" && rsync -azc --no-perms --omit-dir-times -e "$SSH" $DONNEES_PUBLIQUES "$HOTE:$DISTANT/data/")
+  # Exactement les mêmes transferts que la simulation, à un drapeau près.
+  # `LISEZ-MOI.md` est exclu dans `transferts` : c'est une note de travail qui,
+  # déployée, serait servie publiquement — aucun refus nginx ne la couvre, seul
+  # « README.md » est nommé.
+  printf '\n  Envoi…\n'
+  transferts "-azci" | sed 's/^/    /'
 
   printf '\n  Redémarrage…\n'
   $SSH "$HOTE" "sudo systemctl restart mkl-energies && sudo systemctl --no-pager is-active mkl-energies" | sed 's/^/    /'
