@@ -18,6 +18,12 @@ create temporary table resultat (
   detail text
 ) on commit drop;
 
+-- `service_role` doit pouvoir consigner ses propres verdicts : certains tests
+-- basculent sur ce rôle pour éprouver les droits réels de l'application.
+-- La séquence du `serial` compte aussi : sans son usage, l'insertion échoue.
+grant insert, select on resultat to service_role;
+grant usage on sequence resultat_rang_seq to service_role;
+
 create temporary table contexte (
   org uuid,
   opp uuid,
@@ -343,31 +349,52 @@ begin
   end;
 end $$;
 
+-- La suppression se mesure sous `service_role`, le rôle qu'emploient toutes
+-- les routes du CRM, et non sous le propriétaire de la base. La version
+-- précédente de ce test se connectait en propriétaire : la suppression
+-- réussissait, et le test concluait à tort à une faille applicative. Un
+-- administrateur se connectant en SQL direct peut supprimer, c'est voulu ;
+-- l'application, non.
 do $$
-declare c record; presentes integer; supprimees integer;
+declare droits text;
+begin
+  select coalesce(string_agg(privilege_type, ',' order by privilege_type), 'aucun')
+    into droits
+    from information_schema.role_table_grants
+   where table_schema = 'public' and table_name = 'lead_attribution'
+     and grantee = 'service_role'
+     and privilege_type in ('UPDATE', 'DELETE');
+
+  insert into resultat (domaine, intitule, verdict, detail) values
+    ('attribution', 'service_role ne peut ni réécrire ni supprimer une attribution',
+     case when droits = 'aucun' then 'réussi' else 'ÉCHOUÉ' end,
+     'droits constatés : ' || droits);
+end $$;
+
+-- Au-delà de la table des droits, l'opération est réellement tentée sous le
+-- rôle de l'application. `set local` limite le changement à la transaction.
+set local role service_role;
+
+do $$
+declare c record;
 begin
   select * into c from contexte;
-  select count(*) into presentes from public.lead_attribution
-   where opportunity_id = c.opp;
-
-  if presentes = 0 then
+  delete from public.lead_attribution where opportunity_id = c.opp;
+  insert into resultat (domaine, intitule, verdict, detail) values
+    ('attribution', 'la suppression échoue réellement sous service_role', 'ÉCHOUÉ',
+     'suppression acceptée');
+exception
+  when insufficient_privilege then
     insert into resultat (domaine, intitule, verdict, detail) values
-      ('attribution', 'une attribution ne peut pas être supprimée', 'NON CONCLUANT',
-       'aucune ligne à supprimer : le test ne démontre rien');
-    return;
-  end if;
-
-  begin
-    delete from public.lead_attribution where opportunity_id = c.opp;
-    get diagnostics supprimees = row_count;
+      ('attribution', 'la suppression échoue réellement sous service_role', 'réussi',
+       'droit DELETE absent');
+  when others then
     insert into resultat (domaine, intitule, verdict, detail) values
-      ('attribution', 'une attribution ne peut pas être supprimée', 'ÉCHOUÉ',
-       supprimees || ' ligne(s) supprimée(s) sur ' || presentes);
-  exception when others then
-    insert into resultat (domaine, intitule, verdict, detail) values
-      ('attribution', 'une attribution ne peut pas être supprimée', 'réussi', sqlerrm);
-  end;
+      ('attribution', 'la suppression échoue réellement sous service_role', 'réussi',
+       sqlerrm);
 end $$;
+
+reset role;
 
 -- ===========================================================================
 -- D. Sécurité OAuth
