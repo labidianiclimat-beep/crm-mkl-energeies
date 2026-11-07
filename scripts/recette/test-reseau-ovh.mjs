@@ -56,9 +56,13 @@ function info(intitule, valeur) {
 // Configuration
 // ---------------------------------------------------------------------------
 
+// Le chemin du module peut arriver par l'environnement plutôt que par la ligne
+// de commande : exécuté à distance, ce script est transmis par l'entrée
+// standard, et n'a donc ni fichier sur le disque ni arguments à lui.
 const argModule = (() => {
   const i = process.argv.indexOf("--module");
-  return i > 0 ? process.argv[i + 1] : "";
+  if (i > 0 && process.argv[i + 1]) return process.argv[i + 1];
+  return String(process.env.CRM_SYNC_MODULE || "").trim();
 })();
 
 const url = String(process.env.CRM_SYNC_URL || "").trim();
