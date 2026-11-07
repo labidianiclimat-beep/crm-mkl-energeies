@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   assertAssignableAccess,
   grantedModules,
@@ -19,6 +20,40 @@ test("normalizes consignes Administrateur to Admin VIP", () => {
   assert.equal(normalizeRoleLabel("Secretariat"), "Secrétariat");
   assert.equal(normalizeRoleLabel("Admin second"), "Superadmin");
   assert.equal(normalizeRoleLabel("Superadmin"), "Superadmin");
+});
+
+test("un libelle annoncant une consultation n obtient pas l administration", () => {
+  // « Lecture » était associé à « Superadmin », c'est-à-dire à l'administration
+  // courante. Le nom promet une consultation et accordait l'inverse ; qui
+  // l'attribuerait pour restreindre élargirait. Aucun compte ne le porte en
+  // production, et le catalogue n'offre aucun rôle de consultation seule : le
+  // libellé reste donc inconnu, et un rôle inconnu n'ouvre rien.
+  assert.equal(normalizeRoleLabel("Lecture"), "Lecture");
+  assert.equal(isAdminRole("Lecture"), false);
+  assert.equal(canAccessModule(
+    { role: "Lecture", modules: ["Utilisateurs", "Prospects"], active: true, onboarding_completed_at: "2026-01-01T00:00:00Z" },
+    "Utilisateurs"
+  ), false);
+  // La reprise des libellés hérités de `page.js` ne doit pas rétablir par la
+  // main ce que le catalogue refuse.
+  const accueil = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.doesNotMatch(accueil, /"Lecture"\s*\?\s*"Superadmin"/);
+});
+
+test("la gestion des utilisateurs se ferme sur un role inconnu", () => {
+  // Le filtre protégeait les rôles non administrateurs, mais l'absence de
+  // définition le court-circuitait : il valait mieux porter un libellé inconnu
+  // qu'un rôle reconnu sans droits d'administration. Une faute de frappe
+  // suffisait donc à conserver le module.
+  assert.deepEqual(sanitizeGrantedModules(["Utilisateurs", "Prospects"], { role: "Lectrice" }), ["Prospects"]);
+  assert.deepEqual(sanitizeGrantedModules(["Utilisateurs", "Prospects"], { role: "Commercial" }), ["Prospects"]);
+  // Les deux rôles d'administration le gardent, et un rôle vide ou absent
+  // devient « Commercial » : il est reconnu, donc filtré lui aussi.
+  for (const role of ["Admin VIP", "Superadmin"]) {
+    assert.ok(sanitizeGrantedModules(["Utilisateurs"], { role }).includes("Utilisateurs"), role);
+  }
+  assert.deepEqual(sanitizeGrantedModules(["Utilisateurs"], { role: "" }), []);
+  assert.deepEqual(sanitizeGrantedModules(["Utilisateurs"], {}), []);
 });
 
 test("catalog includes minimum étape 8 roles", () => {

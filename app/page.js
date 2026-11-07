@@ -562,7 +562,11 @@ export default function Home() {
     setTeam(current=>{
       const migrated=current.map(user=>{
         if(user.name==="Marie Laurent") user={...user,name:"Khaled",email:user.email==="marie@mkl-energies.fr"?"contact@mkl-energies.fr":user.email};
-        const role=user.role==="Administrateur"?"Admin VIP":user.role==="Conducteur de travaux"?"Responsable technique":user.role==="Lecture"?"Superadmin":user.role;
+        // « Lecture » n'est plus traduit en « Superadmin » : cette reprise de
+        // libellés hérités promouvait en administration un rôle annoncé comme
+        // consultation. Il reste tel quel, donc sans définition, et n'obtient
+        // que le tableau de bord par le repli ci-dessous.
+        const role=user.role==="Administrateur"?"Admin VIP":user.role==="Conducteur de travaux"?"Responsable technique":user.role;
         const manager=(user.manager==="Marie Laurent"?"Khaled":user.manager)||(role==="Commercial"?"Khaled":role==="Technicien"?"Responsable technique":"Direction");
         let modules=user.modules||roleDefaults[role]||["Tableau de bord"];
         if(modules.includes("Devis & Factures")) modules=[...modules.filter(m=>m!=="Devis & Factures"),"Devis",...(["Admin VIP","Superadmin"].includes(role)?["Factures"]:[])];

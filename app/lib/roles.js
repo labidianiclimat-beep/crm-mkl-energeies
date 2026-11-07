@@ -54,7 +54,14 @@ export const ROLE_ALIASES = {
   Superadmin: "Superadmin",
   "Super admin": "Superadmin",
   SuperAdmin: "Superadmin",
-  Lecture: "Superadmin",
+  // « Lecture » ne figure pas ici, et ne doit pas y revenir. Ce libellé annonce
+  // une consultation ; il était associé à « Superadmin », c'est-à-dire à
+  // l'administration courante. Qui l'attribuerait en croyant restreindre
+  // accorderait l'inverse. Aucun compte ne le porte — relevé en production le
+  // 7 novembre, vingt-trois profils, neuf libellés tous déjà canoniques — et le
+  // catalogue ne propose aucun rôle de consultation seule : il n'y a donc rien
+  // à traduire. Un libellé hérité qui ne correspond à aucun rôle connu
+  // n'obtient aucun droit, ce que `sanitizeGrantedModules` garantit plus bas.
   Direction: "Direction",
   "Responsable commercial": "Responsable commercial",
   "Responsable prospection": "Responsable prospection",
@@ -284,7 +291,13 @@ export function sanitizeGrantedModules(modules = [], { role } = {}) {
     if (ACCESS_MODULES.includes(name) && !next.includes(name)) next.push(name);
   }
   const definition = role ? getRoleDefinition(role) : null;
-  if (definition && !definition.isAdmin) {
+  // La gestion des utilisateurs n'est conservée que pour un rôle reconnu comme
+  // administrateur. Un libellé inconnu — un rôle hérité, une faute de frappe —
+  // la perd aussi : il valait mieux, auparavant, être non reconnu que
+  // simplement non administrateur, puisque l'absence de définition laissait
+  // passer le module. Un rôle vide ou absent n'est pas concerné : il devient
+  // « Commercial » par `normalizeRoleLabel`, donc une définition existe.
+  if (!definition || !definition.isAdmin) {
     return next.filter(module => module !== "Utilisateurs");
   }
   return next;
