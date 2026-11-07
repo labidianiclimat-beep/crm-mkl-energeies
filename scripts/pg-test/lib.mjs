@@ -61,13 +61,53 @@ export async function connecter(database = "postgres") {
   return sql;
 }
 
+/**
+ * Migrations de catalogue qui lisent des lignes déjà présentes.
+ * La préparation versionnée est jouée juste avant la première d'entre elles.
+ */
+export const FICHIERS_CATALOGUE_DEPENDANTS = new Set([
+  "20261015_aquarea_m.sql",
+  "20261015_aquarea_m_brochure_5.sql",
+  "20261015_zubadan_23.sql",
+]);
+
+/** Refuse toute cible autre que le PostgreSQL local de test, avant toute suppression. */
+export function refuserHoteDistant() {
+  if (CONNEXION.host !== "127.0.0.1" || Number(CONNEXION.port) !== 55432) {
+    throw new Error(
+      `Cible refusée : ${CONNEXION.host}:${CONNEXION.port}. Seul 127.0.0.1:55432 est autorisé.`
+    );
+  }
+}
+
 /** Recrée une base vide. Jamais de réutilisation : un essai part d'un état connu. */
 export async function recreerBase(nom) {
+  refuserHoteDistant();
+  if (!/^[a-z][a-z0-9_]*$/.test(nom)) {
+    throw new Error(`Nom de base refusé : ${nom}`);
+  }
   const admin = await connecter("postgres");
-  await admin.unsafe(`drop database if exists "${nom}" with (force)`);
-  await admin.unsafe(`create database "${nom}"`);
-  await admin.end();
-  return connecter(nom);
+  try {
+    const ident = await admin`
+      select host(inet_server_addr()) as addr, inet_server_port() as port, current_database() as db
+    `;
+    if (ident[0].addr !== "127.0.0.1" || Number(ident[0].port) !== 55432 || ident[0].db !== "postgres") {
+      throw new Error(`Serveur refusé : ${ident[0].addr}:${ident[0].port}/${ident[0].db}`);
+    }
+    await admin.unsafe(`drop database if exists "${nom}" with (force)`);
+    await admin.unsafe(`create database "${nom}"`);
+  } finally {
+    await admin.end();
+  }
+  const sql = await connecter(nom);
+  const verif = await sql`
+    select current_database() as db, host(inet_server_addr()) as addr, inet_server_port() as port
+  `;
+  if (verif[0].db !== nom || verif[0].addr !== "127.0.0.1" || Number(verif[0].port) !== 55432) {
+    await sql.end();
+    throw new Error(`Base ouverte refusée : ${verif[0].addr}:${verif[0].port}/${verif[0].db}`);
+  }
+  return sql;
 }
 
 export function migrations() {
@@ -95,27 +135,53 @@ export function fichierSql(chemin) {
  * autre : les essais de retour arrière suppriment délibérément des index, donc
  * une base héritée n'est pas dans un état connu.
  */
-export async function preparerBase(nom, { sauf = [] } = {}) {
-  const sql = await recreerBase(nom);
-  await sql.unsafe(fichierSql("scripts/pg-test/supabase-shim.sql"));
-
-  let restants = migrations().filter(item => !sauf.includes(item.nom));
+/**
+ * Joue une liste de migrations, plusieurs passes, chaque fichier dans sa transaction.
+ * La préparation de catalogue est insérée une fois, avant les trois fichiers qui
+ * lisent la fourniture air/eau et la marque Mitsubishi.
+ */
+export async function appliquerMigrations(sql, liste) {
+  let preparation = false;
+  const passes = [];
+  const messages = new Map();
+  let restants = liste;
   let avant = Infinity;
-  const echecs = new Map();
   while (restants.length > 0 && restants.length < avant) {
     avant = restants.length;
     const suivants = [];
+    const reussis = [];
     for (const migration of restants) {
+      if (!preparation && FICHIERS_CATALOGUE_DEPENDANTS.has(migration.nom)) {
+        await sql.begin(tx => tx.unsafe(fichierSql("scripts/pg-test/catalogue-prerequis.sql")));
+        preparation = true;
+      }
       try {
         await sql.begin(tx => tx.unsafe(migration.sql));
+        reussis.push(migration.nom);
       } catch (error) {
-        echecs.set(migration.nom, error.message);
+        messages.set(migration.nom, String(error.message || error).split("\n")[0]);
         suivants.push(migration);
       }
     }
+    passes.push({
+      reussis,
+      echecs: suivants.map(item => ({ nom: item.nom, message: messages.get(item.nom) })),
+    });
     restants = suivants;
   }
-  return { sql, restants: restants.map(item => ({ nom: item.nom, motif: echecs.get(item.nom) })) };
+  return {
+    preparation,
+    passes,
+    restants: restants.map(item => ({ nom: item.nom, motif: messages.get(item.nom) })),
+  };
+}
+
+export async function preparerBase(nom, { sauf = [] } = {}) {
+  const sql = await recreerBase(nom);
+  await sql.unsafe(fichierSql("scripts/pg-test/supabase-shim.sql"));
+  const liste = migrations().filter(item => !sauf.includes(item.nom));
+  const resultat = await appliquerMigrations(sql, liste);
+  return { sql, ...resultat };
 }
 
 export const ORG = "00000000-0000-0000-0000-000000000001";

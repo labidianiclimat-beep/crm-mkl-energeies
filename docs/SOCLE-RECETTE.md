@@ -85,6 +85,62 @@ Aucune de ces divergences ne concerne les cinq migrations marketing : elles ne
 citent ni `crm_files`, ni `pv_simulations`, ni aucune des trois fonctions. La
 répétition sur la recette reste donc représentative.
 
+### Les politiques saisies à la main neutralisent le contrôle par module
+
+Les politiques RLS sont `permissive` : PostgreSQL les combine par un **ou**
+logique. Il suffit donc qu'une seule accorde l'accès.
+
+Sur `crm_state`, le dépôt pose `crm_state_select` et `crm_state_write`, qui
+exigent `profile_can_access_state(p, state_key)`, soit un compte actif, un
+accueil terminé, et le module correspondant présent dans `p.modules`. La
+production porte en plus trois politiques saisies à la main qui n'exigent que
+`organization_id = current_organization_id()`.
+
+Combinées par un **ou**, ces trois-là rendent les deux premières sans effet.
+Il en résulte que tout utilisateur connecté de l'organisation peut lire et
+écrire n'importe quelle ligne de `crm_state`, quel que soit son module. Seul
+`active = true` subsiste, par l'intermédiaire de `current_organization_id()` ;
+la condition `onboarding_completed_at is not null` tombe également.
+
+Exposition mesurée, en agrégats : 22 profils actifs, et 7 clés d'état d'une
+ligne chacune.
+
+| Clé d'état | Module requis | Autorisés par le dépôt | Accès réel |
+|---|---|---|---|
+| `mkl-company` | aucun, donc administrateurs | 3 | 22 |
+| `mkl-pv-simulations` | aucun, donc administrateurs | 3 | 22 |
+| `mkl-table-migrations` | aucun, donc administrateurs | 3 | 22 |
+| `mkl-pv-projects` | Photovoltaïque administratif | 8 | 22 |
+| `mkl-thermal-studies` | Études thermiques | 8 | 22 |
+| `mkl-contracts` | Maintenance | 9 | 22 |
+| `mkl-technical-visits` | Visites techniques | 9 | 22 |
+
+La table ne contient ni donnée client ni donnée personnelle : ses colonnes
+sont `organization_id`, `state_key`, `state_value jsonb`, `updated_by` et
+`updated_at`. C'est un magasin de configuration d'écrans, partagé par toute
+l'organisation à raison d'une ligne par clé.
+
+La portée réelle est donc l'**intégrité** plutôt que la confidentialité :
+chaque ligne étant commune à tous, une écriture par un utilisateur hors module
+perturbe l'écran pour l'ensemble de l'organisation. Et la clé `mkl-users`,
+que `profile_can_access_state` réserve explicitement aux administrateurs,
+n'existe pas encore dans la table : elle serait exposée de la même façon le
+jour où un écran de gestion des utilisateurs y rangerait son état.
+
+Ce n'est pas théorique : `app/lib/supabase-rest.js` porte `"use client"` et
+appelle PostgREST depuis le navigateur avec `Authorization: Bearer
+<access_token>` de l'utilisateur. Les politiques sont donc le seul rempart,
+et non une défense en profondeur derrière un contrôle serveur.
+
+Sur `profiles`, de la même façon, `members can read profiles` élargit la
+lecture à toute l'organisation, là où le dépôt la limitait à sa propre fiche
+ou aux administrateurs. Cet élargissement est probablement voulu, le CRM ayant
+besoin d'afficher la liste des commerciaux.
+
+Conséquence pour la recette : le socle y sera **plus strict** que la
+production, puisque ces politiques manuelles n'existent dans aucune migration.
+Un comportement admis en production peut donc être refusé en recette.
+
 ## Contrôles
 
 `scripts/recette/controles.sql`, en lecture seule, compare dix mesures aux

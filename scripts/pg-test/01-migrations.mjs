@@ -14,9 +14,13 @@
  * ce qui ne passe pas, pas de s'arrêter au premier problème.
  */
 
-import { fichierSql, journal, migrations, recreerBase } from "./lib.mjs";
+import { appliquerMigrations, fichierSql, journal, migrations, recreerBase } from "./lib.mjs";
 
 const BASE = process.env.PG_TEST_DB || "mkl_test";
+if (BASE !== "mkl_test") {
+  console.error(`Cible refusée : la base demandée est « ${BASE} », seule mkl_test est autorisée pour cette répétition.`);
+  process.exit(1);
+}
 
 const log = journal();
 log.titre(`Migrations du CRM sur une base PostgreSQL réelle — base « ${BASE} »`);
@@ -39,66 +43,25 @@ log.titre("Historique des migrations");
 const fichiers = migrations();
 log.info(`${fichiers.length} fichiers à jouer`);
 
-/**
- * Plusieurs passes, et non une seule.
- *
- * L'ordre alphabétique des noms de fichiers ne respecte pas toujours l'ordre
- * des dépendances : `20260316_service_role_grants` accorde des droits sur une
- * table créée par `20260317_clients`, et
- * `20261003_internal_request_assignees` référence une table créée par
- * `20261003_internal_requests`, qui trie après lui. Rejouer les échecs après
- * les autres résout ces inversions sans réécrire l'historique, qui est déjà
- * appliqué en production.
- */
-async function appliquer(liste) {
-  const restants = [];
-  for (const migration of liste) {
-    try {
-      await sql.begin(async tx => {
-        await tx.unsafe(migration.sql);
-      });
-    } catch (error) {
-      restants.push({ ...migration, message: error.message });
-    }
-  }
-  return restants;
-}
+const resultat = await appliquerMigrations(sql, fichiers);
+if (resultat.preparation) log.ok("préparation de catalogue appliquée avant les trois fichiers dépendants");
+else log.ko("préparation de catalogue non appliquée");
 
-let restants = fichiers;
-let passe = 0;
-let avant = Infinity;
-while (restants.length > 0 && restants.length < avant) {
-  avant = restants.length;
-  passe += 1;
-  restants = await appliquer(restants);
-  log.info(`passe ${passe} : ${avant - restants.length} migration(s) appliquée(s), ${restants.length} restante(s)`);
-}
+let appliquees = 0;
+resultat.passes.forEach((passe, index) => {
+  appliquees += passe.reussis.length;
+  log.info(`passe ${index + 1} : ${passe.reussis.length} migration(s) appliquée(s), ${passe.echecs.length} restante(s)`);
+  for (const echec of passe.echecs) log.info(`  échec ${echec.nom} — ${echec.message}`);
+});
 
-/**
- * Migrations de données du catalogue : elles lèvent une exception quand les
- * articles qu'elles complètent n'existent pas. Sur une base vide, c'est le
- * comportement voulu, pas une anomalie de syntaxe.
- */
-const DONNEES_CATALOGUE = /^20261015_/;
-const catalogue = restants.filter(item => DONNEES_CATALOGUE.test(item.nom));
-const echecs = restants.filter(item => !DONNEES_CATALOGUE.test(item.nom));
-
-if (echecs.length === 0) {
-  log.ok(`les ${fichiers.length - catalogue.length} migrations de structure s'exécutent sans erreur`);
+if (resultat.restants.length === 0 && appliquees === fichiers.length) {
+  log.ok(`${fichiers.length} migrations appliquées sur ${fichiers.length}`);
 } else {
-  log.ko(`${echecs.length} migration(s) de structure en échec sur ${fichiers.length}`);
-  for (const echec of echecs) {
+  log.ko(`${resultat.restants.length} migration(s) en échec sur ${fichiers.length}`);
+  for (const echec of resultat.restants) {
     console.log(`\n    ${echec.nom}`);
-    console.log(`      ${echec.message}`);
+    console.log(`      ${echec.motif}`);
   }
-}
-
-if (catalogue.length > 0) {
-  log.info(
-    `${catalogue.length} migration(s) de données du catalogue refusées faute d'articles : ` +
-      catalogue.map(item => item.nom.replace(/\.sql$/, "")).join(", ")
-  );
-  log.info("attendu sur une base vide — ces migrations complètent un catalogue existant");
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +170,44 @@ for (const attendue of [
 const purges = fonctions.filter(row => row.proname === "purge_web_lead_payloads");
 if (purges.length === 1) log.ok("une seule version de purge_web_lead_payloads, l'appel reste non ambigu");
 else log.ko(`${purges.length} versions de purge_web_lead_payloads coexistent`);
+
+log.titre("Catalogue Aquarea et Zubadan");
+
+const referencesAttendues = [
+  "wh-wxg09me5",
+  "wh-wxg12me5",
+  "wh-wxg09me8",
+  "wh-wxg12me8",
+  "wh-wxg16me8",
+  "wh-wxg20me8",
+  "wh-wxg25me8",
+  "wh-wxg30me8",
+  "wh-adc0316m3e52",
+  "wh-adc0316m6e52",
+  "wh-adc0316m9e82",
+  "wh-cme5",
+  "wh-cme8",
+  "wh-cme8l",
+  "cz-rtw2taw1c",
+  "puhz-shw230yka2",
+];
+const articlesCatalogue = await sql`
+  select lower(reference) as reference, fiche_nom
+    from public.articles
+   where lower(reference) = any(${referencesAttendues})
+`;
+const presentes = new Set(articlesCatalogue.map(row => row.reference));
+for (const reference of referencesAttendues) {
+  if (presentes.has(reference)) log.ok(`article ${reference}`);
+  else log.ko(`article ${reference} absent`);
+}
+const avecBrochure = articlesCatalogue.filter(row => row.fiche_nom === "A2W-Aquarea-M_FR.pdf");
+if (avecBrochure.length > 0) log.ok(`${avecBrochure.length} article(s) Aquarea portent la brochure`);
+else log.ko("aucun article Aquarea ne porte la brochure");
+
+const tableTempo = await sql`select to_regclass('public._aquarea_brochure_part') as reg`;
+if (tableTempo[0].reg) log.ko("la table temporaire de brochure est encore présente");
+else log.ok("aucune table temporaire de brochure");
 
 log.titre("Dette search_path");
 

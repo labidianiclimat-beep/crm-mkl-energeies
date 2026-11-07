@@ -33,3 +33,8 @@ scripts/recette/lots/
 # Données et substituts locaux du site OVH : jamais versionnés, pour qu un
 # substitut de recette ne puisse pas être déployé à la place du vrai fichier.
 ovh-site/data/
+
+# État local du client Supabase. « linked-project.json » nomme le projet
+# auquel ce poste est rattaché : versionné, ce rattachement voyagerait avec le
+# dépôt, et une commande lancée ailleurs viserait le projet d un autre.
+supabase/.temp/

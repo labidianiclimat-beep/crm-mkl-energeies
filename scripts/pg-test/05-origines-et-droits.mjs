@@ -24,9 +24,7 @@ const log = journal();
 // retour arrière suppriment des index pour prouver qu'ils sont annulables.
 const { sql, restants } = await preparerBase(process.env.PG_TEST_DB_OD || "mkl_origines");
 
-// Les trois migrations de données du catalogue échouent sur une base vide,
-// faute d'organisation à alimenter. C'est attendu et sans effet ici.
-const bloquantes = restants.filter(item => !/^20261015_/.test(item.nom));
+const bloquantes = restants;
 if (bloquantes.length === 0) {
   log.ok("les migrations de structure sont toutes appliquées");
 } else {
