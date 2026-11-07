@@ -118,8 +118,15 @@ test("le trafic naturel ne devient jamais publicitaire", () => {
 
 test("une demande sans UTM ni référent est un accès direct au site", () => {
   assert.deepEqual(classifyWebLead({}), {
-    category: "site_web", subtype: "direct", evidence: "utm",
+    category: "site_web", subtype: "direct", evidence: "",
   });
+});
+
+test("un accès direct ne revendique aucune preuve UTM", () => {
+  // Le classement est le même qu'avec des UTM naturels, mais sa justification
+  // ne l'est pas : seul le second cas peut être compté comme « classé par UTM ».
+  assert.equal(classifyWebLead({}).evidence, "");
+  assert.equal(classifyWebLead({ utm_medium: "organic" }).evidence, "utm");
 });
 
 test("un canal non publicitaire et non naturel reste à qualifier", () => {

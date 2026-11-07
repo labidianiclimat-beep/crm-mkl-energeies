@@ -86,26 +86,32 @@ async function nettoyer() {
   console.log("\n  Nettoyage des données fictives de ce banc d'essai\n");
   garderCible();
 
-  const avant = sql(
-    `select count(*) from public.commercial_opportunities where email like '%${MARQUE}%'`);
-  console.log(`    ${avant} fiche(s) de test repérée(s).\n`);
+  const marquees = `select (select count(*) from public.commercial_opportunities
+        where email like '%${MARQUE}%') || ' fiche(s) et '
+     || (select count(*) from public.web_lead_submissions
+        where payload->>'email' like '%${MARQUE}%') || ' demande(s)'`;
+  console.log(`    ${sql(marquees)} de test repérée(s).\n`);
 
-  // L'ordre suit les dépendances : ce qui pointe vers une fiche part avant la
-  // fiche. Les demandes désignent la fiche par opportunity_id, et les
-  // attributions la désignent par l'identifiant de soumission.
+  // Une demande peut très bien n'avoir aucune fiche : c'est le cas de celles
+  // mises en vérification de doublon. Les reconnaître par la seule fiche
+  // rattachée en laisserait traîner. On les reconnaît donc aussi par le
+  // courriel fictif inscrit dans leur contenu.
+  const DEMANDES = `select s.id, s.submission_id from public.web_lead_submissions s
+      where s.payload->>'email' like '%${MARQUE}%'
+         or s.opportunity_id in (
+              select id from public.commercial_opportunities where email like '%${MARQUE}%')`;
+
+  // L'ordre suit les dépendances : ce qui pointe vers une demande ou une fiche
+  // part avant elle.
   const etapes = [
-    ["attributions", `delete from public.lead_attribution where submission_id in (
-        select s.submission_id from public.web_lead_submissions s
-         join public.commercial_opportunities o on o.id = s.opportunity_id
-        where o.email like '%${MARQUE}%')`],
+    ["attributions", `delete from public.lead_attribution
+       where submission_id in (select submission_id from (${DEMANDES}) d)`],
     ["rendez-vous", `delete from public.commercial_appointments where opportunity_id in (
         select id from public.commercial_opportunities where email like '%${MARQUE}%')`],
-    ["événements de file", `delete from public.web_lead_events where submission_pk in (
-        select s.id from public.web_lead_submissions s
-         join public.commercial_opportunities o on o.id = s.opportunity_id
-        where o.email like '%${MARQUE}%')`],
-    ["demandes", `delete from public.web_lead_submissions where opportunity_id in (
-        select id from public.commercial_opportunities where email like '%${MARQUE}%')`],
+    ["événements de file", `delete from public.web_lead_events
+       where submission_pk in (select id from (${DEMANDES}) d)`],
+    ["demandes", `delete from public.web_lead_submissions
+       where id in (select id from (${DEMANDES}) d)`],
     ["fiches prospects", `delete from public.commercial_opportunities where email like '%${MARQUE}%'`],
   ];
 
@@ -114,12 +120,11 @@ async function nettoyer() {
     console.log(`      ✓ ${intitule} supprimé(e)s`);
   }
 
-  const reste = sql(
-    `select count(*) from public.commercial_opportunities where email like '%${MARQUE}%'`);
+  const reste = sql(marquees);
   const total = sql(`select (select count(*) from public.web_lead_submissions) || ' demande(s), '
     || (select count(*) from public.commercial_opportunities) || ' prospect(s), '
     || (select count(*) from public.lead_attribution) || ' attribution(s)'`);
-  console.log(`\n    Restant portant la marque : ${reste} fiche(s)`);
+  console.log(`\n    Restant portant la marque : ${reste}`);
   console.log(`    Total en base : ${total}\n`);
 }
 
@@ -167,9 +172,15 @@ const CAS = [
   {
     cle: "google_ads",
     titre: "Google Ads",
-    libelle: "Prospect GG Ads · Google Ads",
+    // Sans suffixe, et c'est volontaire côté CRM : `SUBTYPE_LABELS` n'a pas
+    // d'entrée pour ce sous-type, donc `mirrorSourceLabel` n'ajoute rien.
+    libelle: "Prospect GG Ads",
     categorie: "google_ads",
     attributions: "unique|gclid",
+    // Trois personnes différentes, donc trois numéros différents. Un numéro
+    // partagé ferait voir au CRM un doublon possible, et il refuserait — à
+    // juste titre — de créer la fiche. Cette règle est éprouvée plus bas.
+    tel: "0600000011",
     arrivees: [
       { search: `?gclid=${MARQUE}-gclid-fictif&utm_source=google&utm_medium=cpc&utm_campaign=PAC%20hiver`,
         path: "/pompe-a-chaleur.html" },
@@ -181,7 +192,10 @@ const CAS = [
     titre: "Facebook",
     libelle: "Prospect Face · Facebook",
     categorie: "meta_ads",
-    attributions: "premier|referrer,dernier|fbclid",
+    // Les deux contacts sont rendus dans l'ordre alphabétique du rôle, imposé
+    // par la requête de contrôle : « dernier » précède donc « premier ».
+    attributions: "dernier|fbclid,premier|referrer",
+    tel: "0600000012",
     arrivees: [
       { referrer: "https://www.bing.com/search", path: "/" },
       { search: `?fbclid=${MARQUE}-fbclid-fictif&utm_source=facebook&utm_medium=paid_social&utm_campaign=PV%20automne`,
@@ -194,7 +208,12 @@ const CAS = [
     titre: "Site Internet",
     libelle: "Prospect Site · Accès direct",
     categorie: "site_web",
-    attributions: "aucune",
+    // Un contact est bien enregistré — la visite a eu lieu — mais sans preuve
+    // à citer : aucun paramètre n'accompagnait l'arrivée.
+    attributions: "unique|sans preuve",
+    note: "si la Preview répond « utm », c'est l'ancien code : le correctif "
+      + "d'étiquetage attend un déploiement, le classement lui-même est bon",
+    tel: "0600000013",
     arrivees: [
       { path: "/climatisation.html" },
     ],
@@ -229,13 +248,15 @@ function capturer(arrivees) {
 function formulaire(cas) {
   const champs = capturer(cas.arrivees);
   return {
-    intent: "etude",
+    // Le serveur n'admet que « devis » ou « rappel » : les valeurs sont lues
+    // dans server.mjs, pas devinées.
+    intent: "devis",
     projects: cas.projets,
     postalCode: "13001",
     housing: "maison",
     firstName: "Essai",
     lastName: `Fictif ${cas.titre}`,
-    phone: "0600000009",
+    phone: cas.tel,
     email: `${MARQUE}-${cas.cle}@exemple.test`,
     message: "Demande fictive de recette, a supprimer.",
     pagePath: cas.arrivees[cas.arrivees.length - 1].path,
@@ -344,10 +365,15 @@ for (const cas of CAS) {
     charge.error ? `réponse : ${charge.error}` : `demande ${String(charge.id || "").slice(0, 8)}`);
 }
 
-// La file est vidée dès la création, mais l'envoi est asynchrone : on attend
-// que les trois fiches soient visibles plutôt que de supposer un délai.
+// Comportement à connaître, et mesuré ici plutôt que supposé : chaque demande
+// déclenche un passage de la file, mais un verrou interdit deux passages
+// simultanés. Trois envois rapprochés ne partent donc pas tous les trois
+// immédiatement — les suivants attendent le passage périodique, toutes les
+// soixante secondes. Rien n'est perdu, mais l'attente doit couvrir ce cycle,
+// sinon le test conclurait à un échec de transmission qui n'existe pas.
+const ATTENTE_MAX_MS = 150_000;
 async function attendreArrivee(attendu) {
-  for (let essai = 0; essai < 40; essai += 1) {
+  for (let essai = 0; essai < ATTENTE_MAX_MS / 500; essai += 1) {
     const n = Number(sql(
       `select count(*) from public.commercial_opportunities where email like '%${MARQUE}%'`));
     if (n >= attendu) return n;
@@ -370,7 +396,8 @@ console.log("");
 for (const cas of CAS) {
   const courriel = `${MARQUE}-${cas.cle}@exemple.test`;
   const lu = sql(`select coalesce(o.source, 'absent') || ' ~ ' || coalesce(o.origin_category, 'absent')
-      || ' ~ ' || coalesce((select string_agg(coalesce(a.touch_role, 'unique') || '|' || a.evidence, ',' order by a.touch_role)
+      || ' ~ ' || coalesce((select string_agg(coalesce(a.touch_role, 'unique') || '|'
+              || coalesce(nullif(a.evidence, ''), 'sans preuve'), ',' order by a.touch_role)
             from public.lead_attribution a
             join public.web_lead_submissions s on s.submission_id = a.submission_id
            where s.opportunity_id = o.id), 'aucune')
@@ -379,7 +406,7 @@ for (const cas of CAS) {
   const [libelle, categorie, attributions] = lu ? lu.split(" ~ ") : ["absent", "absent", "absent"];
   noter(`${cas.titre} — libellé affiché`, cas.libelle, libelle);
   noter(`${cas.titre} — origine enregistrée`, cas.categorie, categorie);
-  noter(`${cas.titre} — contacts d'attribution`, cas.attributions, attributions);
+  noter(`${cas.titre} — contacts d'attribution`, cas.attributions, attributions, cas.note);
 }
 
 // Contrôle de non-régression le plus important : une visite sans marqueur ne
@@ -390,6 +417,54 @@ const publicitaireIndu = sql(
       and origin_category in ('google_ads', 'meta_ads')`);
 noter("une visite sans marqueur reste non publicitaire", "0", publicitaireIndu,
   "aucune provenance n'est inventée");
+
+// ---------------------------------------------------------------------------
+// La règle de non-fusion, éprouvée au lieu d'être supposée
+// ---------------------------------------------------------------------------
+
+// Une quatrième demande reprend le numéro du prospect Google Ads sous un autre
+// courriel, et se présente cette fois comme venant de Facebook. Si le CRM
+// fusionnait sur le seul téléphone, il écraserait une provenance déjà
+// enregistrée. Le comportement attendu est l'inverse : il met la demande de
+// côté pour un examen humain et ne touche à rien.
+console.log("");
+const homonyme = {
+  ...formulaire(CAS[1]),
+  phone: CAS[0].tel,
+  email: `${MARQUE}-homonyme@exemple.test`,
+  lastName: "Fictif Homonyme",
+};
+const envoiHomonyme = await fetch(`http://127.0.0.1:${PORT}/api/leads`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(homonyme),
+  signal: AbortSignal.timeout(20_000),
+});
+noter("un homonyme par téléphone est accepté par le site", 201, envoiHomonyme.status,
+  "le tri ne se fait pas sur le site, mais dans le CRM");
+
+async function attendreStatut(courriel) {
+  for (let essai = 0; essai < ATTENTE_MAX_MS / 500; essai += 1) {
+    const statut = sql(`select status from public.web_lead_submissions
+      where payload->>'email' = '${courriel}'`);
+    if (statut && statut !== "pending" && statut !== "processing") return statut;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return "jamais traitée";
+}
+const statutHomonyme = await attendreStatut(`${MARQUE}-homonyme@exemple.test`);
+noter("le CRM met le doublon possible en vérification", "review", statutHomonyme,
+  "« Doublon à vérifier » : aucune fusion automatique sur le téléphone");
+
+noter("aucune fiche n'est créée pour l'homonyme", "0",
+  sql(`select count(*) from public.commercial_opportunities
+        where email = '${MARQUE}-homonyme@exemple.test'`),
+  "la demande attend une décision, elle n'est pas perdue");
+
+noter("la provenance du prospect existant est intacte", CAS[0].categorie,
+  sql(`select coalesce(origin_category, 'absent') from public.commercial_opportunities
+        where email = '${MARQUE}-${CAS[0].cle}@exemple.test'`),
+  "un contact Facebook n'a pas réécrit une origine Google Ads");
 
 // ---------------------------------------------------------------------------
 

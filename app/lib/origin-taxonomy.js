@@ -194,7 +194,17 @@ export function classifyWebLead(input = {}) {
     return { category: "site_web", subtype: "referral", evidence: "referrer" };
   }
   if (ORGANIC_MEDIUMS.includes(medium)) {
-    return { category: "site_web", subtype: medium === "" ? "direct" : "seo", evidence: "utm" };
+    // `evidence` dit sur quoi repose le classement, et sert d'où vient cette
+    // ligne lors d'un contrôle. Un accès direct n'a aucun paramètre : annoncer
+    // « utm » laisserait croire à une preuve qui n'existe pas, et fausserait
+    // tout décompte des demandes classées grâce aux UTM. La chaîne vide, déjà
+    // admise par la contrainte en base, dit la seule chose vraie : rien à citer.
+    const direct = medium === "";
+    return {
+      category: "site_web",
+      subtype: direct ? "direct" : "seo",
+      evidence: direct ? "" : "utm",
+    };
   }
   return { category: "a_qualifier", subtype: "", evidence: "inconnu" };
 }

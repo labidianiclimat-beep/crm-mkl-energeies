@@ -12,10 +12,10 @@ suivante. L'ordre proposé va du moins risqué au plus engageant.
 | Élément | État |
 |---|---|
 | Chaîne OVH → CRM → Supabase RECETTE | éprouvée, 10 contrôles depuis le VPS |
-| Attribution Google Ads, Facebook, Site | éprouvée pièce par pièce, 9 tests de contrat |
+| Attribution Google Ads, Facebook, Site | éprouvée de bout en bout, 19 contrôles sur 20 |
 | Clé SSH du VPS | installée sur le compte `ubuntu` |
 | Site en ligne | version du 3 novembre, sans l'attribution |
-| Arbre du site dans ce dépôt | incomplet, voir plus bas |
+| Arbre du site dans ce dépôt | complet |
 | `GOOGLE_SOLAR_API_KEY`, `CRM_ACCESS_PIN` | exposés dans 17 archives, à renouveler |
 
 ## 1. Renouveler les deux secrets
@@ -87,32 +87,55 @@ l'attribution à l'arrivée du visiteur et l'ajoute juste avant l'envoi ; le
 serveur du site la conserve sur la demande ; la file d'attente signe et
 transmet au CRM ; le CRM classe sans jamais inventer de provenance.
 
-### Ce qui bloque
+### Ce qui a été éprouvé
 
-L'arbre `ovh-site/` de ce dépôt est une **copie de travail, pas la source de
-déploiement**. Deux modules importés par le code en sont absents :
-
-- `ovh-site/lib/callback-deadline.mjs`, importé par `compliance-proof.mjs`
-- `ovh-site/lib/conversion-datalayer.mjs`, servi au navigateur par `app.js`
-
-Les deux existent sur le serveur. Conséquences :
-
-1. `server.mjs` ne démarre pas depuis ce dépôt, ce qui empêche d'éprouver
-   l'intégration autrement que pièce par pièce.
-2. La disposition diffère : le serveur attend `index.html` et `app.js` à la
-   racine, le dépôt les place sous `site-public/`.
-
-`deploy.sh` refuse déjà de partir d'un arbre qui ne satisfait pas son critère,
-donc **aucun risque immédiat pour le site en ligne**. Mais tant que la source de
-déploiement n'est pas identifiée, l'intégration ne peut pas être mise en ligne.
+Les trois modules qui manquaient au dépôt ont été récupérés du serveur et
+versionnés, et l'arbre est désormais complet :
 
 ```sh
-node scripts/mise-en-service/verifier-site-complet.mjs
+node scripts/mise-en-service/verifier-site-complet.mjs   # 3 contrôles passés
 ```
 
-Ce contrôle nomme les manques et vérifie que les fichiers appartenant au serveur
-sont exclus du `rsync --delete`. Il est joué par la batterie automatique, en
-étape non bloquante.
+Le banc d'essai démarre alors le vrai `server.mjs`, sur des données isolées dans
+un dossier temporaire, et lui soumet trois formulaires construits avec le vrai
+module de capture du navigateur : **19 contrôles sur 20**.
+
+```sh
+node scripts/recette/test-formulaires-ovh.mjs --complet
+node scripts/recette/test-formulaires-ovh.mjs --nettoyer
+```
+
+Trois constats méritent d'être retenus, parce qu'ils ne se devinent pas.
+
+**Un envoi groupé n'arrive pas d'un coup.** Chaque demande déclenche un passage
+de la file, mais un verrou interdit deux passages simultanés. Trois envois
+rapprochés partent donc en deux fois, le reste au passage périodique suivant,
+soixante secondes plus tard. Rien n'est perdu ; seule l'attente d'un test doit
+couvrir ce cycle.
+
+**Le CRM refuse de fusionner sur le seul téléphone.** C'est la règle demandée, et
+elle est maintenant éprouvée plutôt que supposée : une quatrième demande reprenant
+le numéro du prospect Google Ads sous un autre courriel, et se présentant comme
+venant de Facebook, part en « Doublon à vérifier ». Aucune fiche n'est créée,
+l'origine Google Ads déjà enregistrée reste intacte, et la demande attend une
+décision humaine sans disparaître.
+
+**Google Ads s'affiche sans suffixe.** `Prospect GG Ads`, et non
+`Prospect GG Ads · Google Ads` : `SUBTYPE_LABELS` n'a pas d'entrée pour ce
+sous-type. C'est volontaire.
+
+### Ce qui reste rouge
+
+Un seul contrôle, et il attend un déploiement, pas une correction.
+
+Une visite directe, sans aucun paramètre, était étiquetée `evidence = "utm"` :
+une preuve annoncée alors qu'il n'y en a aucune, ce qui aurait faussé tout
+décompte des demandes classées grâce aux UTM. Le classement lui-même était juste
+(`site_web` / `direct`). `classifyWebLead` renvoie désormais la chaîne vide dans
+ce cas — valeur déjà admise par la contrainte en base, donc sans migration.
+
+La Preview déployée exécute encore l'ancien code : le banc d'essai lit `utm` et
+signale l'écart. Il redeviendra vert au prochain déploiement de recette.
 
 ### Retour arrière
 
@@ -144,7 +167,6 @@ node scripts/recette/test-http-ovh.mjs --complet
 node scripts/recette/test-http-ovh.mjs --nettoyer
 
 # 3. Intégration réelle des formulaires, serveur du site démarré localement
-#    (indisponible tant que les deux modules manquants ne sont pas versionnés)
 node scripts/recette/test-formulaires-ovh.mjs --complet
 node scripts/recette/test-formulaires-ovh.mjs --nettoyer
 
