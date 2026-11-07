@@ -554,13 +554,41 @@ et **les vingt-et-une ressources du site répondent toujours 200** — pages,
 deux modules publics de `/lib/`, les données publiques, `robots.txt`,
 `sitemap.xml`, `admin.html`.
 
-**Ce qui reste à faire, et qui demande votre décision.** Les deux `.env` et les
-soixante-trois autres fichiers sont toujours *sur le disque*, dans la racine
-web — simplement plus servis. La défense en profondeur voudrait qu'ils en
-sortent, vers `/home/ubuntu/archives-deploy/` par exemple. Et bien que rien
-n'indique une fuite, faire tourner `SESSION_SECRET` et `ADMIN_PASSWORD_HASH`
-coûte peu : la première invalide les sessions d'administration ouvertes, la
-seconde change votre mot de passe d'administration.
+**Les fichiers sont sortis de la racine web**, le 7 novembre à 19 h 56 UTC. Les
+soixante-cinq de `deploy/` et les huit de `scripts/` sont désormais dans
+`/home/ubuntu/archives-deploy/`, en 0700 — archivés, pas supprimés. Rien ne
+pointait vers eux : zéro référence dans systemd, zéro dans cron, aucune
+minuterie, et aucune page du site ne les citait. Vérifié avant de bouger quoi
+que ce soit, précisément parce qu'une unité ou une tâche planifiée qui aurait
+lu ces chemins aurait cassé le site. Après le déplacement, **vingt-trois
+ressources sur vingt-trois répondent 200**.
+
+À noter pour plus tard : le `.env` en service vit lui aussi dans la racine web,
+à `/var/www/mkl-energies/.env`. Il est en 0600 et doublement refusé — par la
+règle des fichiers cachés et par le nouveau motif `\.env$` — mais le sortir de
+là demanderait de modifier `EnvironmentFile` dans l'unité systemd, ce qui n'a
+pas été fait.
+
+**La rotation est préparée, pas appliquée** :
+`scripts/mise-en-service/rotation-secrets-site.sh`. Ses contrôles passent déjà,
+six sur six. Le mot de passe n'y traverse ni l'historique du shell, ni la liste
+des processus, ni un fichier : il est lu à l'aveugle, puis transmis par
+l'entrée standard d'une session SSH chiffrée et haché sur place. C'est le point
+sur lequel elle corrige son prédécesseur — `hash-admin-password.mjs` prenait le
+mot de passe en **argument de ligne de commande**, donc il atterrissait dans les
+deux premiers.
+
+Le programme distant ne remplace que les deux lignes concernées et **refuse
+d'écrire** s'il n'en trouve pas exactement une de chaque ; l'écriture est
+atomique, par `rename`, en 0600. La sauvegarde précédente est horodatée dans
+`/home/ubuntu/archives-env/`, et `--retour` la remet. L'épreuve finale est la
+seule qui prouve vraiment quelque chose : une connexion réelle avec le nouveau
+mot de passe, encore en mémoire, avant qu'il ne soit oublié.
+
+Ce que la rotation casse, et c'est voulu : elle **déconnecte les sessions
+d'administration ouvertes** et remplace le mot de passe d'administration du
+site. Elle ne touche ni au CRM, ni aux données clients, ni aux formulaires, ni
+à Google.
 
 **Le nouveau script, `deploy/ovh/deployer-attribution.sh`.** Il part du constat
 inverse de son prédécesseur : le dépôt n'est pas un miroir du serveur. Il ne

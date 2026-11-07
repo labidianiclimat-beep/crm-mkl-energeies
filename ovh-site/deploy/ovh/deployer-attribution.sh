@@ -160,7 +160,7 @@ deployer() {
   $SSH "$HOTE" "sudo systemctl restart mkl-energies && sudo systemctl --no-pager is-active mkl-energies" | sed 's/^/    /'
 
   printf '\n'
-  eprouver
+  eprouver apres
 }
 
 # ---------------------------------------------------------------------------
@@ -168,12 +168,25 @@ deployer() {
 # ---------------------------------------------------------------------------
 eprouver() {
   ANOMALIE=0
+  # Le module de capture n'est attendu qu'après le déploiement. Avant, son
+  # absence est l'état normal, et la signaler comme une anomalie ferait crier
+  # au loup : l'épreuve perdrait toute valeur d'alerte.
+  ATTENDU_APRES="${1:-}"
   echo_titre "Épreuve du site"
-  for CHEMIN in / /rdv.html /photovoltaique.html /app.js /lib/attribution-capture.mjs; do
+  for CHEMIN in / /rdv.html /photovoltaique.html /pompe-a-chaleur.html /app.js /styles.css /admin.html; do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$SITE$CHEMIN" || echo 000)
     if [ "$CODE" = "200" ]; then ok "$CHEMIN" "code $CODE"; else nok "$CHEMIN" "code $CODE"; fi
   done
-  for CHEMIN in /server.mjs /data/leads.json /lib/crm-sync.mjs /.env; do
+
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$SITE/lib/attribution-capture.mjs" || echo 000)
+  if [ "$ATTENDU_APRES" = "apres" ]; then
+    if [ "$CODE" = "200" ]; then ok "/lib/attribution-capture.mjs" "code $CODE"
+    else nok "/lib/attribution-capture.mjs" "code $CODE"; fi
+  else
+    printf '    · %-44s %s\n' "/lib/attribution-capture.mjs" "code $CODE — pas encore déployé, normal"
+  fi
+  for CHEMIN in /server.mjs /data/leads.json /lib/crm-sync.mjs /.env \
+                /deploy/ovh/deploy.sh /scripts/hash-admin-password.mjs; do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$SITE$CHEMIN" || echo 000)
     if [ "$CODE" = "404" ]; then ok "$CHEMIN refusé" "code $CODE"; else nok "$CHEMIN refusé" "code $CODE"; fi
   done
