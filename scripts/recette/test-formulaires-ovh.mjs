@@ -210,9 +210,11 @@ const CAS = [
     categorie: "site_web",
     // Un contact est bien enregistré — la visite a eu lieu — mais sans preuve
     // à citer : aucun paramètre n'accompagnait l'arrivée.
+    // Et c'est la distinction qui compte : « sans preuve » n'est pas
+    // « inconnu ». Un visiteur venu en direct est classé, tandis qu'une
+    // demande « inconnue » reste à qualifier. Les confondre gonflerait l'un
+    // des deux décomptes au détriment de l'autre.
     attributions: "unique|sans preuve",
-    note: "si la Preview répond « utm », c'est l'ancien code : le correctif "
-      + "d'étiquetage attend un déploiement, le classement lui-même est bon",
     tel: "0600000013",
     arrivees: [
       { path: "/climatisation.html" },

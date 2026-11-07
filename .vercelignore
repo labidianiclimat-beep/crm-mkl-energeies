@@ -16,11 +16,16 @@ ovh-site
 .env.local
 .env.*.local
 
-# Travaux de recette : lots de migrations découpés et relevé de schéma. Rien
-# là-dedans n'est nécessaire à la compilation, et un schéma de base n'a pas à
-# être lisible depuis un déploiement.
-scripts/recette/lots
-scripts/recette/schema-recette.sql
+# Outillage d'exploitation. Ces scripts citent nécessairement l'identifiant du
+# projet de production, puisque leur rôle est de le reconnaître pour le
+# refuser, et décrivent les procédures de bascule. La compilation n'en a aucun
+# besoin : « build:vercel » n'appelle que les deux vérificateurs restés à la
+# racine de scripts/, et ceux-ci n'importent que des modules de Node.
+scripts/recette
+scripts/env-split
+scripts/mise-en-service
+scripts/pg-test
+docs
 supabase/.temp
 
 # Compilation locale. Ce point mérite une explication, parce qu'il est
