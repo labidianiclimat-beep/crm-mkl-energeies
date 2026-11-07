@@ -419,6 +419,42 @@ déclencheur interdit : vérification faite, aucun ne vise la colonne `source`
 d'un prospect. Quatre visent le champ `extra` d'un rendez-vous ou d'une autre
 entité, un la table `commercial_appointments`.
 
+**Étape 2 faite le 7 novembre 2026 à 19 h 35 UTC.** Les trois variables
+`WEB_LEAD_KEYRING`, `WEB_LEAD_ORGANIZATION_ID` et `WEB_LEAD_RETENTION_DAYS` sont
+posées sur Production, puis le CRM a été redéployé — commit `3cb9424`,
+`dpl_6W4d5ckwTmVQ7nEQtgL1GYt2GGtb`, neuf contrôles sur neuf. Le `CRON_SECRET`
+n'a pas été touché : il date de trente-neuf jours et **diffère de celui du
+coffre local**, qui a été régénéré le 5 novembre. Le reposer aurait cassé les
+quatre tâches planifiées.
+
+L'organisation visée est `00000000-0000-0000-0000-000000000001`, celle qui porte
+les 246 prospects et les 4 212 clients. Le choix méritait d'être vérifié : la
+production contient **deux organisations portant le même nom**, et la seconde,
+`07937728-…`, est vide. Une erreur ici aurait rendu les demandes du site
+invisibles à l'équipe.
+
+**Le trousseau a été éprouvé, et cette épreuve méritait d'être inventée.** Les
+variables Vercel sont de type « Secret » : leur valeur ne peut plus être relue,
+`vercel env pull` ne rend qu'un marqueur `[SENSITIVE]`. Impossible, donc, de
+vérifier par comparaison qu'on a bien posé ce qu'on croyait — et un caractère
+altéré aurait fait refuser toutes les demandes du site, silencieusement, puisque
+le site n'émet pas encore. `scripts/mise-en-service/eprouver-trousseau.mjs`
+contourne l'obstacle en s'appuyant sur l'ordre des contrôles de la route : le
+trousseau, puis la signature, puis le contenu. Un contenu volontairement
+invalide mais **correctement signé** n'obtient un 400 qu'après vérification de
+la signature, et comme le contenu est refusé, rien n'entre en file. Trois cas,
+trois pannes distinguées : 503 le trousseau est absent, 401 sur signature juste
+il diffère, 400 il est exact. Résultat : les trois contrôles passent, le
+trousseau posé est exactement celui du coffre sous l'identifiant `k1`, et la
+file est restée à zéro. Les journaux du serveur n'ont retenu que ces trois
+appels, dans l'ordre exact — corroboration indépendante.
+
+**La tâche de la minute s'est tue.** Zéro erreur sur une trentaine de passages,
+là où le déploiement précédent en produisait une par minute faute de
+`reserve_web_leads`.
+
+Reste l'étape 3, le site OVH, sans laquelle rien n'est encore émis.
+
 **1. Les cinq migrations, sur la production.** Une seule contrainte d'ordre —
 `web_lead_ingest` crée les tables que `web_lead_idempotence` étend. L'ordre
 chronologique la respecte, et les trois autres sont indépendantes :
