@@ -48,9 +48,42 @@ l'ordre compte : créer la nouvelle clé dans la console Google Cloud, la publie
 déployer, vérifier le calcul de production photovoltaïque, **et seulement
 ensuite** supprimer l'ancienne.
 
+#### Ce que la clé doit pouvoir faire, et rien de plus
+
+Le CRM l'utilise depuis `app/lib/google-solar-layers.js`, appelé par
+`app/api/pv/install-yield/route.js`. Deux points d'entrée, tous deux côté
+serveur : `buildingInsights:findClosest` pour les pans de toiture et
+`dataLayers:get` pour l'ombrage et la carte de chaleur. La clé ne part jamais
+vers le navigateur.
+
+Dans la console Google Cloud, sur le projet qui porte déjà l'API Solar :
+
+1. **APIs et services → Identifiants → Créer des identifiants → Clé API.**
+2. Sur la nouvelle clé, **Restrictions relatives aux API → Restreindre la clé →
+   Solar API**, et elle seule. C'est la restriction qui compte vraiment ici.
+3. **Restrictions relatives aux applications : aucune.** Ce n'est pas un oubli.
+   Les restrictions par référent HTTP ne s'appliquent qu'aux appels du
+   navigateur, et une restriction par adresse IP supposerait des adresses fixes
+   que Vercel n'attribue pas sur ce plan. La clé est donc protégée par sa
+   restriction d'API et par son quota, pas par son origine.
+4. **APIs et services → Solar API → Quotas** : poser un plafond journalier.
+   C'est ce qui limite les dégâts si une clé fuite de nouveau, et c'est la seule
+   protection réellement efficace faute de restriction d'application.
+
+#### Publication
+
 ```sh
 sh scripts/mise-en-service/rotation-secrets.sh --solar --production
 ```
+
+La clé est saisie en aveugle, puis **éprouvée auprès de Google sur les deux
+points d'entrée avant d'être publiée**. Une clé refusée arrête le script sans
+rien modifier : un 403 désigne une API non activée ou une restriction trop
+étroite, un 400 une clé mal copiée, un 429 un quota déjà épuisé.
+
+Sans clé valide, le CRM ne tombe pas en panne : l'étude photovoltaïque retombe
+sur PVGIS et la photo IGN, et le message le dit. Le risque d'une mauvaise clé
+est donc une perte de précision, pas une interruption.
 
 ### Retour arrière
 

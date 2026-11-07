@@ -56,6 +56,31 @@ confirmer() {
   [ "$SAISIE" = "$2" ] || arret "Confirmation absente : rien n'a été modifié."
 }
 
+eprouver_solar() {
+  # $1 = clé. Un seul appel, sur les deux points d'entrée réellement utilisés
+  # par le CRM. Publier une clé muette échangerait un secret exposé contre une
+  # panne de l'étude photovoltaïque : autant le savoir avant.
+  CLE_A_TESTER="$1"
+  for POINT in \
+    "buildingInsights:findClosest?location.latitude=43.2965&location.longitude=5.3698&requiredQuality=BASE" \
+    "dataLayers:get?location.latitude=43.2965&location.longitude=5.3698&radiusMeters=50&view=IMAGERY_AND_ANNUAL_FLUX_LAYERS&requiredQuality=BASE&pixelSizeMeters=0.5"
+  do
+    NOM="${POINT%%:*}"
+    # La clé voyage en paramètre, comme l'exige l'API, mais n'apparaît ni à
+    # l'écran ni dans un fichier : seul le code de réponse est conservé.
+    CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+      "https://solar.googleapis.com/v1/${POINT}&key=${CLE_A_TESTER}" 2>/dev/null || echo 000)"
+    case "$CODE" in
+      200) printf '  ✓ %s répond\n' "$NOM" >&2 ;;
+      403) arret "$NOM refuse la clé (403). L'API Solar est-elle activée, et la restriction d'API l'autorise-t-elle ?" ;;
+      400) arret "$NOM renvoie 400 : Google ne reconnaît pas cette clé. Mal copiée, ou issue d'un autre projet ?" ;;
+      429) arret "$NOM renvoie 429 : quota épuisé. Clé non publiée." ;;
+      000) arret "Aucune réponse de Google. Rien n'a été modifié." ;;
+      *)   arret "$NOM renvoie $CODE. Clé non publiée." ;;
+    esac
+  done
+}
+
 poser() {
   # $1 = nom, $2 = valeur. Sans --force : une entrée existante n'est jamais
   # écrasée par accident, il faut la retirer d'abord et le voir.
@@ -141,6 +166,9 @@ case "$ACTION" in
   case "$CLE" in
     *[!A-Za-z0-9_-]*) arret "La clé contient un caractère inattendu : ligne copiée en trop ?" ;;
   esac
+
+  printf '\n  Vérification de la clé auprès de Google, avant toute publication :\n'
+  eprouver_solar "$CLE"
 
   confirmer "GOOGLE_SOLAR_API_KEY va être remplacée." "remplacer"
   vercel env rm GOOGLE_SOLAR_API_KEY "$CIBLE" --yes >/dev/null 2>&1 || true
