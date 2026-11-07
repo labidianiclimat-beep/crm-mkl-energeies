@@ -30,6 +30,11 @@ set -eu
 
 HOTE="${OVH_HOST:-ubuntu@148.113.149.139}"
 DISTANT="${OVH_DIR:-/var/www/mkl-energies}"
+# Le fichier de secrets a quitté la racine web le 7 novembre 2026 : il y était
+# servi, et l'a réellement été — 41 réponses 200 à des robots extérieurs entre
+# le 1er et le 4 novembre. Il vit désormais dans /etc, hors de portée de nginx
+# comme du serveur Node, quel que soit l'état de leurs listes de refus.
+ENVFILE="${OVH_ENV_FILE:-/etc/mkl-energies/env}"
 ARCHIVE="${OVH_ENV_ARCHIVE:-/home/ubuntu/archives-env}"
 CLE="${OVH_SSH_KEY:-$HOME/.ssh/mkl_ovh}"
 SITE="https://mkl-energies.fr"
@@ -49,18 +54,18 @@ controles() {
   [ "$ETAT" = "active" ] && ok "le service tourne" "$ETAT" || nok "le service tourne" "$ETAT"
 
   # Seuls les NOMS des variables sont relevés. Aucune valeur n'est lue.
-  NOMS=$(distant "sudo cut -d= -f1 '$DISTANT/.env' 2>/dev/null | grep -E '^[A-Z_]+$' | sort | tr '\n' ' '" || echo "")
+  NOMS=$(distant "sudo cut -d= -f1 '$ENVFILE' 2>/dev/null | grep -E '^[A-Z_]+$' | sort | tr '\n' ' '" || echo "")
   case "$NOMS" in
     *SESSION_SECRET*ADMIN_PASSWORD_HASH*|*ADMIN_PASSWORD_HASH*SESSION_SECRET*)
       ok "les deux secrets sont présents" "$(echo "$NOMS" | wc -w | tr -d ' ') variables" ;;
     *) nok "les deux secrets sont présents" "relevé : $NOMS" ;;
   esac
 
-  DROITS=$(distant "stat -c %a '$DISTANT/.env'" 2>/dev/null || echo "?")
+  DROITS=$(distant "stat -c %a '$ENVFILE'" 2>/dev/null || echo "?")
   [ "$DROITS" = "600" ] && ok "le fichier reste privé" "droits $DROITS" \
                         || nok "le fichier reste privé" "droits $DROITS"
 
-  HACHE=$(distant "sudo grep -c '^ADMIN_PASSWORD_HASH=scrypt\\\$' '$DISTANT/.env'" 2>/dev/null || echo 0)
+  HACHE=$(distant "sudo grep -c '^ADMIN_PASSWORD_HASH=scrypt\\\$' '$ENVFILE'" 2>/dev/null || echo 0)
   [ "$HACHE" = "1" ] && ok "le mot de passe est haché en scrypt" \
                      || nok "le mot de passe est haché en scrypt" "motif inattendu"
 
@@ -111,7 +116,7 @@ tourner() {
 set -eu
 mkdir -p '$ARCHIVE' && chmod 700 '$ARCHIVE'
 HORO=\$(date -u +%Y%m%dT%H%M%SZ)
-sudo cp -a '$DISTANT/.env' '$ARCHIVE/env-avant-rotation-\$HORO'
+sudo cp -a '$ENVFILE' '$ARCHIVE/env-avant-rotation-\$HORO'
 sudo chown ubuntu:ubuntu '$ARCHIVE/env-avant-rotation-'\$HORO
 sudo chmod 600 '$ARCHIVE/env-avant-rotation-'\$HORO
 echo "    sauvegarde : $ARCHIVE/env-avant-rotation-\$HORO"
@@ -127,7 +132,7 @@ if (!mdp || mdp.length < 12) { console.error("    mot de passe illisible"); proc
 
 const hache = hashPassword(mdp);
 const secret = randomBytes(32).toString("base64url");
-const chemin = "/var/www/mkl-energies/.env";
+const chemin = process.env.MKL_ENVFILE || "/etc/mkl-energies/env";
 const lignes = readFileSync(chemin, "utf8").split("\n");
 
 let vuHache = 0, vuSecret = 0;
@@ -182,9 +187,9 @@ retour() {
   distant "bash -s" <<PROGRAMME
 set -eu
 DERNIERE=\$(sudo ls -1t '$ARCHIVE'/env-avant-rotation-* | head -1)
-sudo cp -a "\$DERNIERE" '$DISTANT/.env'
-sudo chown ubuntu:ubuntu '$DISTANT/.env'
-sudo chmod 600 '$DISTANT/.env'
+sudo cp -a "\$DERNIERE" '$ENVFILE'
+sudo chown ubuntu:ubuntu '$ENVFILE'
+sudo chmod 600 '$ENVFILE'
 sudo systemctl restart mkl-energies
 sleep 2
 echo "    remis : \$DERNIERE"

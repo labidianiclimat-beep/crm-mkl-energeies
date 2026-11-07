@@ -584,6 +584,42 @@ fuite possible. La rotation reste **vivement souhaitable** — une fuite réelle
 eu lieu, et un mot de passe choisi dans la même période mérite d'être remplacé —
 mais ce n'est pas une urgence : les valeurs vivantes sont indemnes.
 
+#### Le fichier de secrets a quitté la racine web, le 7 novembre à 23 h 34
+
+Puisque c'est lui qui a fui, il n'avait rien à faire là. Il est passé de
+`/var/www/mkl-energies/.env` à **`/etc/mkl-energies/env`**, en 0600
+`ubuntu:ubuntu`, dans un dossier en 0750 `root:ubuntu`. Il est désormais hors de
+portée de nginx comme du serveur Node, quel que soit l'état de leurs listes de
+refus — c'est une protection structurelle, et non une règle de plus qu'on peut
+oublier de mettre à jour.
+
+**Le tiret devant le chemin a été retiré de l'unité systemd.** Il disait
+« ignore ce fichier s'il est absent ». Mieux vaut un service qui refuse de
+démarrer qu'un service qui démarre sans ses secrets, sans session valide et
+sans liaison CRM, en silence.
+
+La preuve que le nouveau emplacement est réellement lu ne repose pas sur la
+lecture de l'unité : **l'ancien fichier a été retiré avant le redémarrage**, et
+le service a conservé ses cinq variables. Le site répond sur ses vingt
+contrôles, et `POST /api/admin/login` renvoie bien 401 sur un mauvais mot de
+passe — donc le haché est lu et comparé.
+
+Deux pièges rencontrés, tous deux consignés pour la prochaine fois :
+
+- Le premier `sed` n'a rien remplacé, et le service a continué de lire l'ancien
+  fichier sans que rien ne le signale. Cause : l'unité est en **CRLF**, et un
+  motif ancré par `$` ne peut pas correspondre à une ligne finissant par
+  `^M`. Le remplacement se fait désormais sur les octets.
+- `.env.example` reste dans la racine web et y a reçu 20 réponses 200. Contrôlé :
+  ses deux valeurs sont des exemples — 36 et 21 caractères, des motifs
+  descriptifs — et ne correspondent à aucune valeur réelle, ni actuelle ni
+  archivée. Il est inoffensif et n'a pas été touché.
+
+La sauvegarde de ce soir, `/var/www/mkl-energies.avant-attribution/`, contient
+l'ancien `.env`. Elle est sœur de la racine servie et non dedans, donc
+inatteignable — vérifié à 404 — mais elle est passée en 0700 et son `.env` en
+0600 par précaution.
+
 **La rotation reste compatible avec la liaison CRM posée depuis.** Le script a
 été écrit avant les trois variables `CRM_SYNC_*`, ce qui aurait pu les faire
 disparaître et casser la liaison au premier démarrage suivant. Vérifié : il
