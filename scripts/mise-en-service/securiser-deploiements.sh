@@ -43,23 +43,31 @@ command -v vercel >/dev/null 2>&1 || arret "La commande « vercel » est introuv
 # 1. Depuis quand les archives sont-elles saines ?
 # ---------------------------------------------------------------------------
 
-# Ce qui compte n'est pas la date du commit mais le moment où le fichier a été
-# corrigé SUR LE DISQUE : c'est son contenu, et non l'historique Git, que Vercel
-# lit au moment du téléversement. Les deux dates diffèrent de quelques minutes,
-# et un déploiement lancé entre les deux serait classé à tort.
+# La question exacte est : à partir de quand `.env.local` a-t-il cessé de
+# partir dans l'archive ? Trois dates se présentent, et deux sont des pièges.
+#
+# La date de modification du fichier a d'abord servi, parce qu'elle précède le
+# commit de quelques minutes et que c'est bien le contenu du disque, non
+# l'historique Git, que Vercel téléverse. Mais ce fichier est retouché à chaque
+# nouvelle exclusion : sa date d'écriture finit par désigner un changement
+# étranger à `.env.local`, et condamne alors des déploiements déjà sains.
+#
+# La date du dernier commit a le même défaut, pour la même raison.
+#
+# La seule date stable est celle du PREMIER commit ayant introduit `.env.local`
+# dans ce fichier : elle ne bouge plus, quoi qu'on ajoute ensuite.
 cd "$RACINE"
-COMMIT="$(git log -1 --format=%ct -- .vercelignore 2>/dev/null || echo 0)"
-[ "$COMMIT" != "0" ] || arret "Impossible de dater la correction de .vercelignore."
+CORRECTION="$(git log -S".env.local" --format=%ct --reverse -- .vercelignore 2>/dev/null | head -1)"
+[ -n "$CORRECTION" ] \
+  || arret "Impossible de dater l'entrée de .env.local dans .vercelignore."
+ORIGINE="premier commit ayant exclu .env.local"
 
-if git diff --quiet HEAD -- .vercelignore 2>/dev/null; then
-  CORRECTION="$(stat -f %m .vercelignore 2>/dev/null || stat -c %Y .vercelignore)"
-  ORIGINE="écriture du fichier"
-else
-  # Le fichier a été retouché depuis : sa date d'écriture ne dit plus rien du
-  # contenu qui a servi aux déploiements. On retombe sur le commit.
-  CORRECTION="$COMMIT"
-  ORIGINE="commit, le fichier ayant été retouché depuis"
-fi
+# Le fichier avait été écrit sur le disque quelques minutes avant d'être
+# commité, et un déploiement lancé dans cet intervalle est déjà sain. Faute de
+# pouvoir retrouver cette écriture, l'intervalle est traité comme douteux et
+# ses déploiements sont conservés : une suppression est définitive, un doute ne
+# doit jamais la justifier.
+DOUTE=$(( 15 * 60 ))
 
 printf '\n  Sécurisation des archives de déploiement\n'
 printf '  ───────────────────────────────────────\n'
@@ -129,6 +137,11 @@ for URL in $ADRESSES; do
     NB_GARDES=$((NB_GARDES + 1))
   elif [ "$CREE_MS" -ge "$CORRECTION_MS" ]; then
     DECISION="conservé — archive saine"
+    NB_GARDES=$((NB_GARDES + 1))
+  elif [ "$CREE_MS" -ge $(( CORRECTION_MS - DOUTE * 1000 )) ]; then
+    # Dans l'intervalle entre l'écriture du fichier et son commit : l'archive
+    # est probablement saine, et le doute se tranche en la gardant.
+    DECISION="conservé — intervalle douteux, à vérifier"
     NB_GARDES=$((NB_GARDES + 1))
   else
     DECISION="À SUPPRIMER — archive exposée"
