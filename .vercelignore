@@ -1,1 +1,29 @@
+# Fichiers exclus de l'archive envoyée à Vercel.
+#
+# Attention au piège : dès que ce fichier existe, Vercel l'emploie À LA PLACE
+# de .gitignore. Tout ce qui n'y figure pas est téléversé, même si Git
+# l'ignore. Les exclusions ci-dessous ne sont donc pas des doublons de
+# .gitignore : sans elles, ces chemins partiraient réellement.
+
+# Le site public, déployé sur le VPS OVH et non sur Vercel.
 ovh-site
+
+# Fichiers d'environnement locaux. Celui-ci contient la configuration de
+# PRODUCTION et des secrets applicatifs : il n'a rien à faire dans l'archive
+# d'un déploiement, à plus forte raison d'un déploiement de prévisualisation
+# qui doit viser la recette. Les variables utiles sont posées par la
+# plateforme, environnement par environnement.
+.env.local
+.env.*.local
+
+# Travaux de recette : lots de migrations découpés et relevé de schéma. Rien
+# là-dedans n'est nécessaire à la compilation, et un schéma de base n'a pas à
+# être lisible depuis un déploiement.
+scripts/recette/lots
+scripts/recette/schema-recette.sql
+supabase/.temp
+
+# Dossiers de travail locaux.
+.cursor
+dist
+tmp
