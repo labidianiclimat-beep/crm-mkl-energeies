@@ -85,6 +85,28 @@ Sans clé valide, le CRM ne tombe pas en panne : l'étude photovoltaïque retomb
 sur PVGIS et la photo IGN, et le message le dit. Le risque d'une mauvaise clé
 est donc une perte de précision, pas une interruption.
 
+#### Deux pièges du client Vercel, rencontrés ici
+
+Le premier a failli faire croire à une opération réussie. `vercel env add`
+renvoyait un code de sortie nul pour une variable qui ne s'est jamais trouvée
+dans l'environnement visé. Annoncer une pose qui n'a pas eu lieu est pire qu'un
+échec, puisque personne ne va vérifier : la présence est désormais **relue sur
+place**, et c'est cette relecture qui décide.
+
+Le second est plus grave, et il dormait dans le script. L'aide du client est
+explicite : **`vercel env rm` sans `--environment` retire la variable de _tous_
+ses environnements.** Les appels visaient l'environnement par la forme
+positionnelle, que le client déclare obsolète. Une suppression destinée à la
+recette pouvait donc emporter celle de la production le jour où cette forme
+cesserait d'être honorée. Tous les appels passent maintenant par
+`--environment`, et les suppressions par une fonction unique qui refuse un
+environnement vide.
+
+La cause de la pose fantôme était vraisemblablement la même option manquante à
+l'ajout : sans elle, le client *pose une question*, et sur une entrée standard
+déjà consommée par la valeur de la clé, la réponse à cette question est
+imprévisible.
+
 ### Retour arrière
 
 Pour le code d'accès : reposer l'ancienne valeur et retirer la variable
