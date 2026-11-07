@@ -20,6 +20,9 @@ export const CRM_HEADERS = {
   timestamp: "x-mkl-timestamp",
   nonce: "x-mkl-nonce",
   signature: "x-mkl-signature",
+  // En-tête de Vercel, et non du CRM : il franchit « Vercel Authentication »
+  // avant que la requête n'atteigne la route d'ingestion.
+  bypass: "x-vercel-protection-bypass",
 };
 
 export function bodyDigest(rawBody) {
@@ -91,6 +94,16 @@ export function buildSignedRequest({
   endpoint,
   nonce = randomUUID(),
   now = Date.now(),
+  // Jeton de contournement de la protection Vercel, quand le CRM est protégé
+  // par « Vercel Authentication ». Cette protection intercepte la requête
+  // avant qu'elle n'atteigne la route, et rend 401 sans jamais lire la
+  // signature : sans ce jeton, aucun prospect ne peut entrer.
+  //
+  // Il ne remplace pas la signature, il s'y ajoute. Deux secrets distincts
+  // sont alors nécessaires pour déposer une demande : celui de Vercel, qui
+  // ouvre la porte, et celui du CRM, qui authentifie l'émetteur. Un jeton
+  // volé seul ne permet donc rien.
+  bypassToken = "",
 }) {
   if (!endpoint) throw new Error("Adresse du CRM absente.");
   if (!keyId) throw new Error("Identifiant de clé absent.");
@@ -111,6 +124,9 @@ export function buildSignedRequest({
       [CRM_HEADERS.timestamp]: timestamp,
       [CRM_HEADERS.nonce]: nonce,
       [CRM_HEADERS.signature]: `${SIGNATURE_VERSION}=${signature}`,
+      // Absent quand aucun jeton n'est configuré : l'en-tête ne doit pas
+      // apparaître à vide, ce qui serait interprété comme une tentative.
+      ...(bypassToken ? { [CRM_HEADERS.bypass]: bypassToken } : {}),
     },
   };
 }
@@ -138,8 +154,9 @@ export async function sendCrmJob(job, {
   fetchImpl = globalThis.fetch,
   now = Date.now(),
   nonce,
+  bypassToken = "",
 } = {}) {
-  const request = buildSignedRequest({ job, record, secret, keyId, endpoint, now, nonce });
+  const request = buildSignedRequest({ job, record, secret, keyId, endpoint, now, nonce, bypassToken });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
@@ -183,6 +200,11 @@ export function crmSyncConfig(env = process.env) {
     endpoint: String(env.CRM_SYNC_URL || "").trim(),
     keyId: String(env.CRM_SYNC_KEY_ID || "").trim(),
     secret: String(env.CRM_SYNC_SECRET || ""),
+    // Facultatif : nécessaire seulement si le CRM est protégé par
+    // « Vercel Authentication ». Son absence ne change rien à la
+    // configuration réputée complète, puisqu'un CRM joignable n'en a pas
+    // besoin.
+    bypassToken: String(env.CRM_SYNC_BYPASS || "").trim(),
   };
 }
 

@@ -18,6 +18,10 @@
  *   CRM_SYNC_URL       adresse complète de la route d'ingestion du CRM RECETTE
  *   CRM_SYNC_KEY_ID    identifiant de clé déclaré dans WEB_LEAD_KEYRING
  *   CRM_SYNC_SECRET    secret correspondant, jamais affiché
+ *   CRM_SYNC_BYPASS    facultatif, jeton de contournement de la protection
+ *                      Vercel. Nécessaire quand « Vercel Authentication »
+ *                      est active : elle intercepte la requête avant la route
+ *                      d'ingestion et rend 401 sans jamais lire la signature.
  *
  * Avec `--module`, la signature est produite par le module du site lui-même,
  * ce qui éprouve le code qui tournera réellement. Sans lui, une signature
@@ -148,6 +152,8 @@ if (argModule) {
   }
 }
 
+const bypass = String(process.env.CRM_SYNC_BYPASS || "").trim();
+
 function entetes({ corps, horodatage = Date.now(), nonce = randomUUID(), falsifier = false }) {
   const canonique = chaineCanonique({
     method: "POST", path: cible.pathname, timestamp: horodatage, nonce, rawBody: corps,
@@ -165,6 +171,7 @@ function entetes({ corps, horodatage = Date.now(), nonce = randomUUID(), falsifi
     "x-mkl-timestamp": String(horodatage),
     "x-mkl-nonce": nonce,
     "x-mkl-signature": `v1=${signature}`,
+    ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
   };
 }
 
@@ -195,6 +202,7 @@ info("Chemin", cible.pathname);
 info("Identifiant de clé", keyId);
 info("Secret", `${secret.length} caractères, jamais affiché`);
 info("Signature", origineSignature);
+info("Contournement Vercel", bypass ? `${bypass.length} caractères, jamais affiché` : "aucun jeton fourni");
 console.log("");
 
 // 1. Résolution du nom depuis cette machine.
@@ -246,9 +254,22 @@ const corps = JSON.stringify({
 // 3. Sans signature : prouve que la route atteinte est bien l'ingestion, et
 //    que le contrôle HMAC est actif de l'autre côté.
 {
-  const r = await envoyer(corps, { "content-type": "application/json" });
-  noter("une requête sans signature est refusée", 401, r.statut,
-    `${r.charge?.error || ""} — ${r.duree} ms aller-retour`);
+  const r = await envoyer(corps, {
+    "content-type": "application/json",
+    ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+  });
+  // Le message distingue les deux 401 possibles, qui n'ont rien à voir : celui
+  // de Vercel, qui n'a pas laissé passer la requête, et celui du CRM, qui l'a
+  // bien reçue et a refusé la signature. Les confondre ferait croire que
+  // l'étage HMAC fonctionne alors que la requête n'arrive même pas.
+  const deVercel = /Vercel Authentication/i.test(JSON.stringify(r.charge || {}));
+  noter("une requête sans signature est refusée par le CRM", 401, r.statut,
+    deVercel
+      ? "ATTENTION : refus de Vercel, pas du CRM. La requête n'atteint pas la route."
+      : `${r.charge?.error || ""} — ${r.duree} ms aller-retour`);
+  if (deVercel) {
+    console.log("      Fournissez CRM_SYNC_BYPASS, ou ouvrez la protection du déploiement.");
+  }
 }
 
 // 4. Signature falsifiée d'un caractère.

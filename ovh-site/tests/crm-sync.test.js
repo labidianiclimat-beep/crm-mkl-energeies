@@ -276,3 +276,42 @@ test("aucun envoi sans secret ni adresse", () => {
   assert.throws(() => buildSignedRequest({ ...sendOptions, job: sendJob, endpoint: "" }), /Adresse/);
   assert.throws(() => buildSignedRequest({ ...sendOptions, job: sendJob, keyId: "" }), /clé/);
 });
+
+test("le jeton de contournement s'ajoute à la signature sans la remplacer", () => {
+  // La protection Vercel intercepte la requête avant la route d'ingestion :
+  // sans ce jeton, le CRM ne voit jamais la signature et rend 401. Le jeton
+  // ouvre la porte, la signature authentifie l'émetteur. Les deux doivent
+  // coexister, et le jeton ne doit rien changer à la signature.
+  const commun = {
+    job: { sourceId: "essai-contournement", kind: "lead", createdAt: "2026-11-07T00:00:00.000Z" },
+    record: { name: "Essai Fictif", phone: "0600000000" },
+    secret: "a".repeat(40),
+    keyId: "essai",
+    endpoint: "https://exemple.test/api/web-leads",
+    nonce: "nonce-fixe",
+    now: 1770000000000,
+  };
+  const sans = buildSignedRequest(commun);
+  const avec = buildSignedRequest({ ...commun, bypassToken: "jeton-fictif" });
+
+  assert.equal(avec.headers["x-vercel-protection-bypass"], "jeton-fictif");
+  assert.equal(sans.headers["x-vercel-protection-bypass"], undefined);
+  // La chaîne canonique ne couvre pas les en-têtes : la signature reste
+  // identique, ce qui garantit qu'ajouter le jeton ne casse rien.
+  assert.equal(avec.headers["x-mkl-signature"], sans.headers["x-mkl-signature"]);
+  assert.equal(avec.rawBody, sans.rawBody);
+});
+
+test("un jeton vide ne produit pas d'en-tête vide", () => {
+  // Un en-tête présent mais vide serait lu par Vercel comme une tentative de
+  // contournement ratée, et pourrait être journalisé comme telle.
+  const requete = buildSignedRequest({
+    job: { sourceId: "essai-vide", kind: "lead" },
+    record: { phone: "0600000000" },
+    secret: "b".repeat(40),
+    keyId: "essai",
+    endpoint: "https://exemple.test/api/web-leads",
+    bypassToken: "",
+  });
+  assert.ok(!("x-vercel-protection-bypass" in requete.headers));
+});
