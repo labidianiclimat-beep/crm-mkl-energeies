@@ -194,13 +194,13 @@ function DayPlan({ day, column, editVisit, setEditVisit, busy, toast, onMove, on
                 parts={missingAddressParts(visit)}
                 onComplete={() => {
                   setCallAsk("");
-                  setEditVisit({ id: visit.id, day, time: visit.time || "", address: visit.address || "", postal: visit.postal || "", city: visit.city || "" });
+                  setEditVisit({ id: visit.id, day, time: visit.time || "", address: visit.address || "", postal: visit.postal || "", city: visit.city || "", description: visit.description || "" });
                 }}
                 onCall={() => { setCallAsk(""); dialPhone(visit.phone); }}
               />
             )}
             <div className="entretien-tour-actions">
-              <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => setEditVisit(editing ? null : { id: visit.id, day, time: visit.time || "", address: visit.address || "", postal: visit.postal || "", city: visit.city || "" })}>Modifier</button>
+              <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => setEditVisit(editing ? null : { id: visit.id, day, time: visit.time || "", address: visit.address || "", postal: visit.postal || "", city: visit.city || "", description: visit.description || "" })}>Modifier</button>
               <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => onCancel(visit)}>Annuler</button>
             </div>
             {editing && (
@@ -220,6 +220,15 @@ function DayPlan({ day, column, editVisit, setEditVisit, busy, toast, onMove, on
                   </label>
                 </div>
                 <SiteConfirm draft={editVisit} setDraft={setEditVisit} />
+                <label>
+                  À faire
+                  <textarea
+                    value={editVisit.description || ""}
+                    rows={3}
+                    placeholder="Ce qu’il y a à faire sur place"
+                    onChange={event => setEditVisit({ ...editVisit, description: event.target.value })}
+                  />
+                </label>
                 <div className="prospect-chips">
                   {TOUR_SLOTS.map(time => (
                     <button type="button" key={time} className={editVisit.time === time ? "selected" : ""} onClick={() => setEditVisit({ ...editVisit, time })}>{time}</button>
@@ -635,6 +644,7 @@ export default function EntretienTour({ toast, onPlanned, team = [], clients = [
                   postal: site.postal,
                   city: site.city,
                   location: site.location,
+                  description: next.description,
                 });
               }}
               onCancel={visit => {
@@ -716,7 +726,7 @@ export default function EntretienTour({ toast, onPlanned, team = [], clients = [
                 {row.km != null && <small>{String(row.km).replace(".", ",")} km</small>}
                 {!row.planned && row.tone !== "arret" && (
                   <div className="entretien-tour-actions">
-                    <button className="primary" type="button" disabled={Boolean(busy)} onClick={() => setDraft({ clientId: row.clientId, kind: "book", time: "", day, technicianId: technicianIds.length === 1 ? technicianIds[0] : "", address: row.address || "", postal: row.postal || "", city: row.city || "" })}>Il accepte</button>
+                    <button className="primary" type="button" disabled={Boolean(busy)} onClick={() => setDraft({ clientId: row.clientId, kind: "book", time: "", day, technicianId: technicianIds.length === 1 ? technicianIds[0] : "", address: row.address || "", postal: row.postal || "", city: row.city || "", task: "" })}>Il accepte</button>
                     <button className="secondary" type="button" disabled={Boolean(busy)} onClick={() => setDraft({ clientId: row.clientId, kind: "last", date: "" })}>Dernier entretien</button>
                     <button className="secondary" type="button" disabled={Boolean(busy)} onClick={() => setDraft({ clientId: row.clientId, kind: "callback", date: "" })}>Rappeler le</button>
                     <button className="secondary" type="button" disabled={Boolean(busy)} onClick={() => setDraft({ clientId: row.clientId, kind: "stop", reason: "refus", installedOn: "", years: DEFAULT_WARRANTY_YEARS, equipment: row.equipment || "" })}>N’en veut plus</button>
@@ -728,7 +738,7 @@ export default function EntretienTour({ toast, onPlanned, team = [], clients = [
                     const site = confirmedSite(draft);
                     if (!site.ok) return toast?.(site.error);
                     if (!draft.time) return toast?.("Indiquez l’heure convenue avec le client.");
-                    post("book", row, { day: draft.day || day, time: draft.time, technicianId: draft.technicianId, address: site.address, postal: site.postal, city: site.city, location: site.location });
+                    post("book", row, { day: draft.day || day, time: draft.time, technicianId: draft.technicianId, address: site.address, postal: site.postal, city: site.city, location: site.location, description: draft.task });
                   }}>
                     <p className="entretien-tour-note">Heure convenue au téléphone pour le {dayTitle(draft.day || day)}. Rien n’est posé tant que vous n’enregistrez pas.</p>
                     <SiteConfirm draft={draft} setDraft={setDraft} />
@@ -742,6 +752,15 @@ export default function EntretienTour({ toast, onPlanned, team = [], clients = [
                         <input type="time" value={draft.time} onChange={event => setDraft({ ...draft, time: event.target.value })} required />
                       </label>
                     </div>
+                    <label>
+                      À faire
+                      <textarea
+                        value={draft.task || ""}
+                        rows={3}
+                        placeholder="Ce qu’il y a à faire sur place"
+                        onChange={event => setDraft({ ...draft, task: event.target.value })}
+                      />
+                    </label>
                     <div className="prospect-chips" aria-label="Créneaux de tournée">
                       {TOUR_SLOTS.map(time => (
                         <button type="button" key={time} className={draft.time === time ? "selected" : ""} onClick={() => setDraft({ ...draft, time })}>{time}</button>

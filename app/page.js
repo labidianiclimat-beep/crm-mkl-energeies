@@ -19,7 +19,7 @@ import {
   prospectIdentity,
   readLocalLegacyState,
 } from "./lib/legacy-state-recovery";
-import { canApplyRdvStatus, displayRdvStatus, isAppointmentOutcomeOnlyPatch, rdvStatusTone, rdvStatuerHint } from "./lib/appointment-status";
+import { canApplyRdvStatus, displayRdvStatus, isAppointmentOutcomeOnlyPatch, rdvStatusDeniedMessage, rdvStatusTone } from "./lib/appointment-status";
 import { APPOINTMENT_MOVE_ERROR, agendaScheduleIsChanging, canCorrectAppointmentPhone, isAgendaAssignOrCommentPatch, isAgendaPhonePatch } from "./lib/agenda";
 import { canAccessModule, canEditExistingAppointment, canEditExistingClient, canPerformAction, isAdminRole, isAdminVip } from "./lib/permissions";
 import { canAssignClientCommercial, normalizeClientStatus } from "./lib/clients";
@@ -45,7 +45,7 @@ import {
 } from "./lib/offline-field";
 import { ARTICLE_UNITS, articleUsesVat55, canDeleteArticles, canManageArticles, catalogArticleBrands, catalogArticleCategories, filterCatalogArticles } from "./lib/articles";
 import { resizeBrandLogoFile } from "./lib/brands";
-import { canInvoiceQuote, cloneDocumentForCreate, defaultQuoteDeliveryDate, defaultQuoteValidityDate, DEVIS_FINANCIERS, ELECTRICITY_OPERATORS, findQuoteByNumber, firstMonthlyDelayChoices, isDevisOwnerRole, isUnassignedDevis, isQuoteBundleStart, mustAssignDevisCommercial, quoteArticleRefs, quoteBundleHeading, quoteMatchesClientQuery, quoteStatusLabel, setQuoteBundleHeading, splitPersonName, statusesForKind, statusTone, todayIsoDate } from "./lib/devis";
+import { canInvoiceQuote, cloneDocumentForCreate, computeDocumentTotals, defaultQuoteDeliveryDate, defaultQuoteValidityDate, DEVIS_FINANCIERS, ELECTRICITY_OPERATORS, findQuoteByNumber, firstMonthlyDelayChoices, isDevisOwnerRole, isUnassignedDevis, isQuoteBundleStart, mustAssignDevisCommercial, quoteArticleRefs, quoteBundleHeading, quoteMatchesClientQuery, quoteStatusLabel, setQuoteBundleHeading, splitPersonName, statusesForKind, statusTone, todayIsoDate } from "./lib/devis";
 import { filledQuoteItems, isPreparedFreeLine, withPreparedFreeLine } from "./lib/devis-wizard";
 import { visibleProspects } from "./lib/prospect-to-client";
 import { ACCESS_MODULES, ACTION_PERMISSIONS, extractGrantedActions, normalizeRoleLabel, persistProfileAccess, roleDescriptions, roleModuleDefaults, sanitizeGrantedModules } from "./lib/roles";
@@ -90,8 +90,11 @@ import { isOptimizerPath } from "./lib/optimizer-specs";
 import { atlanticHeatPumpArticles, downloadAtlanticHeatPumpTariff } from "./lib/heat-pump-tariff";
 import BundleBuilderWizard from "./components/bundle-builder-wizard";
 import QuoteBundleHeading from "./components/quote-bundle-heading";
+import QuoteLinePrices from "./components/quote-line-prices";
+import PvBundleOptions from "./components/pv-bundle-options";
+import { pvBundleNeedsOptions } from "./lib/pv-quote-options";
 import TariffGridsView from "./components/tariff-grids";
-import { articleFormSubcategories, bundleLineTotal, bundleTotalHt, findPickerFamily, isPersistedTaxonomyId, itemsByRole, normalizeBundle, resolveBundlePath } from "./lib/article-picker";
+import { articleFormSubcategories, bundleDisplayedTotalHt, bundleLineTotal, bundleUsesForfait, findPickerFamily, forfaitPriceLabel, isPersistedTaxonomyId, itemsByRole, normalizeBundle, resolveBundlePath } from "./lib/article-picker";
 import { groupBundlesByBrand, matchesBundleSearch } from "./lib/article-bundles";
 import CatalogTaxonomyAdmin from "./components/catalog-taxonomy-admin";
 import ProspectFields from "./components/prospect-fields";
@@ -195,24 +198,7 @@ const roleDefaults = roleModuleDefaults();
 const euro = v => new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(v);
 
 function billingTotals(document) {
-  const defaultTax=Number(document?.tax??20);
-  const lines=(document?.items?.length?document.items:[{name:document?.label,qty:1,unit:document?.amount||0,tax:defaultTax}]).map(item=>{
-    const tax=Number(item.tax??defaultTax);
-    const grossHT=Number(item.qty||0)*Number(item.unit||0);
-    const grossTTC=grossHT*(1+tax/100);
-    const discountValue=Math.max(0,Number(item.discountValue||0));
-    const discountTTC=item.discountType==="amount"?Math.min(grossTTC,discountValue):grossTTC*Math.min(100,discountValue)/100;
-    const totalTTC=Math.max(0,grossTTC-discountTTC);
-    const totalHT=totalTTC/(1+tax/100);
-    return {...item,tax,grossHT,grossTTC,discountTTC,totalHT,totalTTC};
-  });
-  const beforeGlobalTTC=lines.reduce((sum,line)=>sum+line.totalTTC,0);
-  const beforeGlobalHT=lines.reduce((sum,line)=>sum+line.totalHT,0);
-  const globalValue=Math.max(0,Number(document?.globalDiscountValue||0));
-  const globalDiscountTTC=document?.globalDiscountType==="amount"?Math.min(beforeGlobalTTC,globalValue):beforeGlobalTTC*Math.min(100,globalValue)/100;
-  const totalTTC=Math.max(0,beforeGlobalTTC-globalDiscountTTC);
-  const totalHT=Math.max(0,beforeGlobalHT-globalDiscountTTC/(1+defaultTax/100));
-  return {lines,beforeGlobalHT,beforeGlobalTTC,globalDiscountTTC,totalHT,totalTTC,taxAmount:totalTTC-totalHT};
+  return computeDocumentTotals(document);
 }
 
 function maintenanceEquipment(items,articles) {
@@ -421,6 +407,7 @@ export default function Home() {
         if(categoriesRes.ok&&Array.isArray(categoriesData.categories)) setCatalogCategories(categoriesData.categories);
         if(subcategoriesRes.ok&&Array.isArray(subcategoriesData.subcategories)) setCatalogSubcategories(subcategoriesData.subcategories);
         if(bundlesRes.ok&&Array.isArray(bundlesData.bundles)) setBundles(bundlesData.bundles);
+        else if(!bundlesRes.ok&&bundlesData.error) showToast(bundlesData.error);
 
         if(clientsRes.ok&&articlesRes.ok&&devisRes.ok) setApiSnapshot({
           clients:Array.isArray(clientsData.clients)?clientsData.clients:[],
@@ -1779,7 +1766,7 @@ export default function Home() {
       throw new Error(APPOINTMENT_MOVE_ERROR);
     }
     if(isAppointmentOutcomeOnlyPatch(changes) && !canApplyRdvStatus(currentProfile, currentProfile?.id, item, changes.status)) {
-      throw new Error(rdvStatuerHint(currentProfile, currentProfile?.id, item) || "Ce statut ne peut pas encore être posé.");
+      throw new Error(rdvStatusDeniedMessage(currentProfile, currentProfile?.id, item, changes.status));
     }
     if(isAgendaPhonePatch(changes) && !canCorrectAppointmentPhone(currentProfile, currentProfile?.id, item) && !canEditExistingAppointment(currentProfile)) {
       throw new Error("Seul le commercial assigné à ce rendez-vous peut corriger le numéro.");
@@ -3383,16 +3370,19 @@ function BundlesView({bundles,query,onAdd,onEdit,onRename,onDuplicate,onDelete,o
 
   function bundleCard(bundle) {
     const path=resolveBundlePath(bundle);
-    const grouped=itemsByRole(normalizeBundle(bundle).items);
+    const normalized=normalizeBundle(bundle);
+    const grouped=itemsByRole(normalized.items);
+    const top=normalized.items[0];
     const enabled=isItemActive(bundle);
+    const forfait=bundleUsesForfait(bundle);
     return <section className={`bundle-card${enabled?"":" is-inactive"}`} key={bundle.id}>
       <QuoteBundleHeading title={bundle.name} onChange={title=>onRename?.(bundle,title)}/>
       <div>
         <Library size={19}/>
         <span><small>{[path.category,path.subcategory,path.brand].filter(Boolean).join(" · ")||bundle.family}</small></span>
-        <strong>{euro(bundleTotalHt(bundle))}</strong>
+        {!forfait && <strong>{euro(bundleDisplayedTotalHt(bundle))}</strong>}
       </div>
-      {[["principal","Matériel"],["supply","Fournitures"],["labor","Main-d’œuvre"]].map(([role,label])=>grouped[role].map((item,i)=><p key={`${role}-${item.code}-${i}`}><span><b>{item.name}</b><small>{label} · × {item.qty||1}</small></span><strong>{euro(bundleLineTotal(item))}</strong></p>))}
+      {[["principal","Matériel"],["supply","Fournitures"],["labor","Main-d’œuvre"]].map(([role,label])=>grouped[role].map((item,i)=><p key={`${role}-${item.code}-${i}`}><span><b>{item.name}</b><small>{label} · × {item.qty||1}</small></span>{forfait ? (item===top ? <strong>{forfaitPriceLabel(bundleDisplayedTotalHt(bundle), bundle.forfaitTax)}</strong> : null) : <strong>{euro(bundleLineTotal(item))}</strong>}</p>))}
       <div className="bundle-card-actions">
         <ActiveToggle active={enabled} onChange={next=>onToggleActive?.(bundle,next)}/>
         <button type="button" onClick={()=>onEdit?.(bundle)}><Pencil size={14}/>Modifier</button>
@@ -3954,7 +3944,7 @@ function BillingFields({clients,prospects=[],documents=[],articles,brands=[],cat
       <div className="quote-lines">
         <div className="quote-line quote-head"><span>ARTICLE</span><span>QTÉ</span><span>PRIX HT</span><span>TVA</span><span>REMISE</span><span>VALEUR</span><span>TOTAL TTC</span><span></span></div>
         {quoteItems.length===0&&<div className="quote-empty"><Package size={20}/><span>Ajoutez un article ou un groupe, ou renseignez la ligne libre.</span></div>}
-        {withPreparedFreeLine(items,tax).map((item,index,lines)=>{const priced=totals.lines.find(line=>String(line.id)===String(item.id));const prepared=isPreparedFreeLine(item);return [isQuoteBundleStart(lines,index)&&<QuoteBundleHeading key={`bundle-${item.id||index}`} title={quoteBundleHeading(item)} onChange={title=>setItems(setQuoteBundleHeading(items,index,title))}/>,<div className="quote-line" key={`${item.id||"line"}-${index}`}><span className="quote-line-article"><input aria-label="Désignation" required={!prepared} placeholder={prepared?"Ligne libre (facultatif)":"Désignation de l’article"} value={item.name||""} onChange={e=>update(item.id,"name",e.target.value)}/><input aria-label="Référence" placeholder="Référence (optionnel)" value={item.code||""} onChange={e=>update(item.id,"code",e.target.value)}/></span><input aria-label="Quantité" type="number" min="0.01" step="0.01" value={item.qty} onChange={e=>update(item.id,"qty",e.target.value)}/><input aria-label="Prix unitaire HT" type="number" min="0" step="0.01" value={item.unit} onChange={e=>update(item.id,"unit",e.target.value)}/><select aria-label="Taux de TVA" value={item.tax??tax} onChange={e=>update(item.id,"tax",Number(e.target.value))}><option value="0">0 %</option><option value="5.5">5,5 %</option><option value="10">10 %</option><option value="20">20 %</option></select><select aria-label="Type de remise" value={item.discountType||"percent"} onChange={e=>update(item.id,"discountType",e.target.value)}><option value="percent">%</option><option value="amount">€ TTC</option></select><input aria-label="Valeur de remise" type="number" min="0" step="0.01" value={item.discountValue||0} onChange={e=>update(item.id,"discountValue",e.target.value)}/><b>{euro(priced?.totalTTC||0)}</b>{!prepared&&<button type="button" onClick={()=>setItems(withPreparedFreeLine(items.filter(line=>line.id!==item.id),tax))}><Trash2 size={15}/></button>}</div>];})}
+        {withPreparedFreeLine(items,tax).map((item,index,lines)=>{const priced=totals.lines.find(line=>String(line.id)===String(item.id));const prepared=isPreparedFreeLine(item);return [isQuoteBundleStart(lines,index)&&<QuoteBundleHeading key={`bundle-${item.id||index}`} title={quoteBundleHeading(item)} onChange={title=>setItems(setQuoteBundleHeading(items,index,title))}/>,<div className="quote-line" key={`${item.id||"line"}-${index}`}><span className="quote-line-article"><input aria-label="Désignation" required={!prepared} placeholder={prepared?"Ligne libre (facultatif)":"Désignation de l’article"} value={item.name||""} onChange={e=>update(item.id,"name",e.target.value)}/><input aria-label="Référence" placeholder="Référence (optionnel)" value={item.code||""} onChange={e=>update(item.id,"code",e.target.value)}/></span><input aria-label="Quantité" type="number" min="0.01" step="0.01" value={item.qty} onChange={e=>update(item.id,"qty",e.target.value)}/><QuoteLinePrices item={item} tax={tax} priced={priced} discountType onChange={(field,value)=>update(item.id,field,value)}/>{!prepared&&<button type="button" onClick={()=>setItems(withPreparedFreeLine(items.filter(line=>line.id!==item.id),tax))}><Trash2 size={15}/></button>}</div>,pvBundleNeedsOptions(lines,index)&&<PvBundleOptions key={`pv-options-${item.bundleId||item.bundleName||index}`} items={lines} index={index} articles={articles} onChange={next=>setItems(withPreparedFreeLine(next,tax))}/>];})}
       </div>
       <div className="quote-summary">
         <div className="global-discount"><label>Remise globale<select name="globalDiscountType" value={globalDiscountType} onChange={e=>setGlobalDiscountType(e.target.value)}><option value="percent">Pourcentage (%)</option><option value="amount">Montant TTC (€)</option></select></label><label>Valeur<input name="globalDiscountValue" type="number" min="0" step="0.01" value={globalDiscountValue} onChange={e=>setGlobalDiscountValue(e.target.value)}/></label></div>

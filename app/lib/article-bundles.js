@@ -2,8 +2,48 @@ import { articleMatchesBundleItem, buildBundleItemFromArticle, normalizeBundle, 
 import { isClimatisationBundle, isClimSplitOutdoorArticle, multiSplitIndoorCount, validateMultiSplitBundle, withClimStandardAccessories } from "./clim-multisplit-bundle.js";
 import { isHeatPumpPath } from "./heat-pump-specs.js";
 
-export const BUNDLE_SELECT =
+export const BUNDLE_SELECT_LEGACY =
   "id,organization_id,name,category,subcategory,brand,family,items,actif,created_at,updated_at,created_by";
+
+export const BUNDLE_SELECT =
+  "id,organization_id,name,category,subcategory,brand,family,items,pricing_mode,forfait_ht,forfait_tva,actif,created_at,updated_at,created_by";
+
+export function isMissingBundleForfaitColumn(error) {
+  const message = String(error?.message || error || "");
+  return error?.code === "42703"
+    || error?.code === "PGRST204"
+    || /pricing_mode|forfait_ht|forfait_tva/.test(message);
+}
+
+export function bundleRecordWithoutForfait(record) {
+  if (Array.isArray(record)) return record.map(bundleRecordWithoutForfait);
+  if (!record || typeof record !== "object") return record;
+  const next = { ...record };
+  delete next.pricing_mode;
+  delete next.forfait_ht;
+  delete next.forfait_tva;
+  return next;
+}
+
+/** Relit les groupes même si le tarif forfait n’est pas encore dans la base. */
+export async function readBundleRows(request, path) {
+  try {
+    return await request(path);
+  } catch (error) {
+    if (!isMissingBundleForfaitColumn(error) || !path.includes(BUNDLE_SELECT)) throw error;
+    return await request(path.replaceAll(BUNDLE_SELECT, BUNDLE_SELECT_LEGACY));
+  }
+}
+
+/** Enregistre un groupe, sans les colonnes forfait si la base ne les a pas. */
+export async function writeBundleRows(request, path, options) {
+  try {
+    return await request(path, options);
+  } catch (error) {
+    if (!isMissingBundleForfaitColumn(error) || !options?.body) throw error;
+    return await request(path, { ...options, body: bundleRecordWithoutForfait(options.body) });
+  }
+}
 
 export const MISSING_BUNDLE_TABLE_MESSAGE =
   "Table des groupes absente. Appliquez la migration 20260917_article_bundles.sql dans Supabase.";
@@ -35,6 +75,9 @@ export function bundleToUi(row) {
     brand: row.brand || "",
     family: row.family || "",
     items: parseItems(row.items),
+    pricing_mode: row.pricing_mode,
+    forfait_ht: row.forfait_ht,
+    forfait_tva: row.forfait_tva,
     active: row.actif !== false,
     status: row.actif !== false ? "Actif" : "Inactif",
     createdAt: row.created_at,
@@ -60,6 +103,9 @@ export function formToBundleRecord(input, { organizationId, createdBy } = {}) {
     brand: normalized.brand || null,
     family: normalized.family || normalized.subcategory || normalized.category || null,
     items: normalized.items,
+    pricing_mode: normalized.pricingMode || "detail",
+    forfait_ht: normalized.pricingMode === "forfait" ? normalized.forfaitHt : null,
+    forfait_tva: normalized.pricingMode === "forfait" ? normalized.forfaitTax : null,
     actif: Boolean(active),
     created_by: createdBy || null,
     updated_at: new Date().toISOString(),
@@ -271,6 +317,12 @@ export function validateBundlePayload(record) {
   const items = Array.isArray(record?.items) ? record.items : [];
   if (!items.some(item => (item.role || "principal") === "principal")) {
     errors.push("Ajoutez au moins un matériel principal.");
+  }
+  if ((record.pricing_mode || record.pricingMode) === "forfait") {
+    const amount = record.forfait_ht ?? record.forfaitHt;
+    if (amount == null || amount === "" || !Number.isFinite(Number(amount))) {
+      errors.push("Indiquez le montant du forfait.");
+    }
   }
   errors.push(...validateMultiSplitBundle(record));
   return errors;

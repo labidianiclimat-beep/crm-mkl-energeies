@@ -68,7 +68,43 @@ export function quoteArticleRefs(document) {
   return [...new Set(codes)].join(" · ") || "—";
 }
 
+export function isForfaitQuoteLine(item) {
+  return item?.forfait === true || item?.forfait === "true";
+}
+
 export function computeLineTotals(item, defaultTax = 20) {
+  if (isForfaitQuoteLine(item)) {
+    const raw = item.forfaitHt ?? item.forfait_montant_ht;
+    const carries = raw != null && raw !== "";
+    const amount = carries ? Math.max(0, Number(raw) || 0) : 0;
+    const tax = carries ? Number(item.tax ?? item.taux_tva ?? defaultTax) : 0;
+    const qty = Number(item.qty ?? item.quantite ?? 0);
+    const grossHT = amount;
+    const grossTTC = grossHT * (1 + tax / 100);
+    const discountValue = carries ? Math.max(0, Number(item.discountValue ?? item.remise ?? 0)) : 0;
+    const discountType = item.discountType || item.remise_type || "percent";
+    const discountTTC = carries
+      ? discountType === "amount"
+        ? Math.min(grossTTC, discountValue)
+        : (grossTTC * Math.min(100, discountValue)) / 100
+      : 0;
+    const totalTTC = Math.max(0, grossTTC - discountTTC);
+    const totalHT = tax >= 0 && tax !== 0 ? totalTTC / (1 + tax / 100) : totalTTC;
+    return {
+      tax,
+      qty,
+      unit: 0,
+      grossHT,
+      grossTTC,
+      discountTTC,
+      totalHT,
+      totalTTC,
+      totalTva: totalTTC - totalHT,
+      forfait: true,
+      forfaitCarrier: carries,
+      hideUnitPrice: true,
+    };
+  }
   const tax = Number(item.tax ?? item.taux_tva ?? defaultTax);
   const qty = Number(item.qty ?? item.quantite ?? 0);
   const unit = Number(item.unit ?? item.prix_unitaire_ht ?? 0);
@@ -208,6 +244,28 @@ export function quoteBundleHeading(item) {
   return String(item?.bundleHeading || item?.bundleName || "").trim();
 }
 
+function quoteLineHay(item) {
+  return [item?.category, item?.categorie, item?.subcategory, item?.sous_categorie, item?.name, item?.designation, item?.code, item?.reference]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+export function isPhotovoltaicQuoteLine(item) {
+  const hay = quoteLineHay(item);
+  return hay.includes("photovolta") || hay.includes("panneau") || hay.includes("onduleur");
+}
+
+/** Titre imprimé une seule fois, au-dessus d’un groupe photovoltaïque. */
+export function photovoltaicGroupTitle(lines = [], index = 0) {
+  if (!isQuoteBundleStart(lines, index)) return "";
+  const key = quoteBundleKey(lines[index]);
+  if (!key) return "";
+  const members = lines.filter(item => quoteBundleKey(item) === key);
+  if (!members.some(isPhotovoltaicQuoteLine)) return "";
+  return quoteBundleHeading(lines[index]);
+}
+
 export function isQuoteBundleStart(items = [], index) {
   const item = items[index];
   const key = quoteBundleKey(item);
@@ -281,6 +339,10 @@ export function lineToDb(item, index, defaultTax = 20) {
     sous_categorie: item.subcategory || item.sous_categorie || null,
     bundle_id: item.bundleId != null ? String(item.bundleId) : null,
     bundle_name: item.bundleName || null,
+    forfait: isForfaitQuoteLine(item),
+    forfait_montant_ht: isForfaitQuoteLine(item) && item.forfaitHt != null && item.forfaitHt !== ""
+      ? Number(item.forfaitHt)
+      : null,
     ordre: Number(item.ordre ?? index),
   };
 }
@@ -322,6 +384,8 @@ export function lineToUi(row) {
     subcategory: row.sous_categorie || "",
     bundleId: row.bundle_id || null,
     bundleName: row.bundle_name || "",
+    forfait: row.forfait === true,
+    forfaitHt: row.forfait_montant_ht == null ? null : Number(row.forfait_montant_ht),
     ordre: row.ordre,
   };
 }

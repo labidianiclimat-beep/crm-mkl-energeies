@@ -5,12 +5,17 @@ import {
   formToBundleRecord,
   validateBundlePayload,
   bundleToUi,
+  bundleRecordWithoutForfait,
   groupBundlesByBrand,
+  isMissingBundleForfaitColumn,
   matchesBundleSearch,
   outdoorBundleDrafts,
   heatPumpBundleDrafts,
   applyClimStandardAccessories,
   climBundlesNeedingStandardAccessories,
+  BUNDLE_SELECT,
+  BUNDLE_SELECT_LEGACY,
+  readBundleRows,
 } from "../app/lib/article-bundles.js";
 import { bundlesForPath, isBundleActive, pickerCategories, pickerSubcategories } from "../app/lib/article-picker.js";
 
@@ -340,4 +345,21 @@ test("un groupe clim recoit FRN-R.R et INST-R.R sans les dupliquer", () => {
   assert.deepEqual(heating.items.map(item => item.code), ["PAC-8"]);
   assert.equal(outdoorBundleDrafts([outdoor], []).length, 1);
   assert.deepEqual(outdoorBundleDrafts([outdoor], [])[0].items.map(item => item.code), ["DAI-UE"]);
+});
+
+test("les groupes restent lisibles si les colonnes forfait ne sont pas encore en base", async () => {
+  const missing = new Error("column article_bundles.pricing_mode does not exist");
+  missing.code = "42703";
+  assert.equal(isMissingBundleForfaitColumn(missing), true);
+  assert.equal(bundleRecordWithoutForfait({ name: "Pack", pricing_mode: "detail", forfait_ht: 10 }).pricing_mode, undefined);
+  const calls = [];
+  const rows = await readBundleRows(async path => {
+    calls.push(path);
+    if (path.includes("pricing_mode")) throw missing;
+    return [{ id: "b1", name: "Pack créé" }];
+  }, `/rest/v1/article_bundles?select=${BUNDLE_SELECT}`);
+  assert.equal(rows[0].name, "Pack créé");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].includes(BUNDLE_SELECT_LEGACY), true);
+  assert.equal(calls[1].includes("pricing_mode"), false);
 });

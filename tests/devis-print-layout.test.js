@@ -80,6 +80,23 @@ test("les prix restent sur la ligne du titre, le détail dans la 1re colonne", (
   assert.doesNotMatch(html, /article-desc" data-split-text>ATLANTIC ALFEA/);
 });
 
+test("un groupe photovoltaïque imprime son titre", async () => {
+  const html = await buildDevisPrintHtml({
+    kind: "Devis",
+    number: "DEV-PV",
+    date: "2026-11-06",
+    due: "2026-12-06",
+    deliveryDate: "2026-11-20",
+    client: "Client Test",
+    items: [
+      { name: "Panneau 500 W", category: "Photovoltaïque", qty: 9, unit: 0, tax: 5.5, forfait: true, forfaitHt: 13127.96, bundleId: "pv-1", bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs", description: "PANNEAU" },
+      { name: "Micro-onduleur", category: "Photovoltaïque", qty: 9, unit: 0, tax: 0, forfait: true, bundleId: "pv-1", bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs", description: "MICRO" },
+    ],
+  }, { logoData: "/mkl-energies.png" });
+  assert.equal((html.match(/class="pv-group-title"/g) || []).length, 1);
+  assert.match(html, /Jinko Solar — 4,5 kW monophasé — micro-onduleurs/);
+});
+
 test("un groupe n imprime pas son surtitre", async () => {
   const html = await buildDevisPrintHtml({
     kind: "Devis",
@@ -134,6 +151,49 @@ test("devis, thermique et prévisite partagent le même bandeau logo", () => {
   assert.match(pvCss, /width:58mm/);
   assert.doesNotMatch(pv, /SERVICE COMMERCIAL/);
   assert.doesNotMatch(pvCss, /\.document-head>div\{background:#405fae/);
+});
+
+test("le forfait photovoltaïque imprime le hors-taxe et le TTC", async () => {
+  const html = await buildDevisPrintHtml({
+    kind: "Devis",
+    number: "DEV-MICRO",
+    date: "2026-11-06",
+    due: "2026-12-06",
+    deliveryDate: "2026-11-20",
+    client: "Client Test",
+    items: [
+      {
+        name: "JINKO SOLAR 54HL4M-BDV-500 W",
+        code: "54HL4M-BDV-500-W",
+        qty: 9,
+        unit: 0,
+        tax: 5.5,
+        forfait: true,
+        forfaitHt: 13127.96,
+        description: "JINKO SOLAR 54HL4M-BDV-500 W\n\nPANNEAU\n\nType de cellule : Monocristallin",
+      },
+      {
+        name: "MICRO-ONDULEUR ENPHASE IQ9N-A-INT",
+        code: "IQ9N-A-INT",
+        qty: 9,
+        unit: 0,
+        tax: 0,
+        forfait: true,
+        forfaitHt: null,
+        description: "MICRO-ONDULEUR ENPHASE IQ9N-A-INT\n\nMICRO-ONDULEUR\n\nMarque : Enphase",
+      },
+    ],
+  }, { logoData: "/mkl-energies.png" });
+  const blocks = [...html.matchAll(/<article[\s\S]*?<\/article>/g)].map(match => match[0]);
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /13[\s\u00a0\u202f]?128/);
+  assert.match(blocks[0], /13[\s\u00a0\u202f]?850/);
+  assert.match(blocks[0], /5,5\s?%/);
+  assert.match(blocks[0], /Type de cellule : Monocristallin/);
+  assert.doesNotMatch(blocks[1], /13[\s\u00a0\u202f]?850/);
+  assert.match(blocks[1], /Marque : Enphase/);
+  const prices = [...blocks[0].matchAll(/<div class="num">([\s\S]*?)<\/div>/g)].map(match => match[1]);
+  assert.equal(prices.filter(cell => /850/.test(cell)).length, 2);
 });
 
 test("le moteur PDF pagine les feuilles fluides avant capture", () => {

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   allowedRdvStatusesFor,
   canApplyRdvStatus,
+  canSignCommercialOrder,
   canStatuerAppointment,
   isAppointmentOutcomeOnlyPatch,
   normalizeAgendaStatus,
@@ -64,6 +65,7 @@ test("le tableau se filtre par commercial sans creer de doublon", () => {
   const ui = readFileSync(new URL("../app/components/commercial-rdv-table.js", import.meta.url), "utf8");
   assert.match(ui, /Tous les commerciaux/);
   assert.match(ui, /Tous les prospecteurs/);
+  assert.doesNotMatch(ui, /Tél\.|ClientPhoneLink|row\.phone/);
 });
 
 test("le filtre statut Non statue retrouve un ancien Planifie", () => {
@@ -82,6 +84,8 @@ test("le commercial statue son rdv, les responsables tous, y compris avant l'heu
   const lead = { role: "Responsable commercial", active: true, onboarding_completed_at: "2026-01-01T00:00:00Z" };
   const dispatcher = { role: "Responsable prospection", active: true, onboarding_completed_at: "2026-01-01T00:00:00Z" };
   const other = { role: "Secrétariat", active: true, onboarding_completed_at: "2026-01-01T00:00:00Z" };
+  const vip = { role: "Admin VIP", active: true, onboarding_completed_at: "2026-01-01T00:00:00Z" };
+  const superadmin = { role: "Super admin", active: true, onboarding_completed_at: "2026-01-01T00:00:00Z" };
   assert.equal(canStatuerAppointment(commercial, "c1", future), true);
   assert.equal(canStatuerAppointment(commercial, "c2", future), false);
   assert.equal(canStatuerAppointment(lead, "lead", future), true);
@@ -90,12 +94,21 @@ test("le commercial statue son rdv, les responsables tous, y compris avant l'heu
   assert.equal(canStatuerAppointment(other, "c1", future), false);
   assert.equal(canApplyRdvStatus(commercial, "c1", future, "Commande signée"), false);
   assert.equal(canApplyRdvStatus(commercial, "c1", future, "RDV à repositionner"), true);
-  assert.equal(canApplyRdvStatus(commercial, "c1", past, "Commande signée"), true);
-  assert.equal(canApplyRdvStatus(lead, "lead", future, "Commande signée"), true);
+  assert.equal(canApplyRdvStatus(commercial, "c1", past, "Commande signée"), false);
+  assert.equal(canApplyRdvStatus(lead, "lead", future, "Commande signée"), false);
+  assert.equal(canApplyRdvStatus(lead, "lead", past, "Client en réflexion"), true);
   assert.equal(canApplyRdvStatus(dispatcher, "x", future, "Client absent"), true);
+  assert.equal(canApplyRdvStatus(vip, "vip", future, "Commande signée"), true);
+  assert.equal(canApplyRdvStatus(superadmin, "sa", future, "Commande signée"), true);
+  assert.equal(canSignCommercialOrder({ role: "Direction" }), false);
   assert.ok(!allowedRdvStatusesFor(commercial, "c1", future).includes("Client en réflexion"));
   assert.ok(allowedRdvStatusesFor(commercial, "c1", past).includes("Client en réflexion"));
-  assert.ok(allowedRdvStatusesFor(dispatcher, "x", future).includes("Commande signée"));
+  assert.ok(!allowedRdvStatusesFor(commercial, "c1", past).includes("Commande signée"));
+  assert.ok(!allowedRdvStatusesFor(dispatcher, "x", future).includes("Commande signée"));
+  assert.ok(allowedRdvStatusesFor(vip, "vip", future).includes("Commande signée"));
+  const alreadySigned = { ...past, status: "Commande signée" };
+  assert.ok(allowedRdvStatusesFor(commercial, "c1", alreadySigned).includes("Commande signée"));
+  assert.equal(canApplyRdvStatus(commercial, "c1", alreadySigned, "Client en réflexion"), true);
 });
 
 test("un commercial peut seulement statuer un rendez-vous existant", () => {

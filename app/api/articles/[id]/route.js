@@ -14,6 +14,8 @@ import {
   bundleToUi,
   formToBundleRecord,
   isMissingBundleTable,
+  readBundleRows,
+  writeBundleRows,
 } from "../../../lib/article-bundles";
 import { syncArticlePriceIntoBundles } from "../../../lib/article-picker";
 import { serviceRequest, serviceRoleConfigured } from "../../../lib/supabase-server";
@@ -224,7 +226,8 @@ export async function PATCH(request, { params }) {
     const article = articleToUi(rows?.[0]);
     let bundles = [];
     try {
-      const bundleRows = await serviceRequest(
+      const bundleRows = await readBundleRows(
+        serviceRequest,
         `/rest/v1/article_bundles?select=${BUNDLE_SELECT}&organization_id=eq.${encodeURIComponent(auth.profile.organization_id)}`
       );
       const updated = syncArticlePriceIntoBundles(article, (bundleRows || []).map(bundleToUi).filter(Boolean));
@@ -235,7 +238,8 @@ export async function PATCH(request, { params }) {
         });
         delete payload.created_by;
         delete payload.organization_id;
-        const saved = await serviceRequest(
+        const saved = await writeBundleRows(
+          serviceRequest,
           `/rest/v1/article_bundles?id=eq.${encodeURIComponent(bundle.id)}&organization_id=eq.${encodeURIComponent(auth.profile.organization_id)}`,
           { method: "PATCH", headers: { Prefer: "return=representation" }, body: payload }
         );

@@ -55,7 +55,7 @@ test("l assistant devis s ouvre depuis creer un devis", () => {
   assert.match(css, /article-wizard-actions\{display:grid;grid-template-columns:1fr 1fr/);
   assert.match(css, /\.devis-wizard-foot\{display:grid;grid-template-columns:1fr 1fr/);
   assert.match(css, /devis-wizard-backdrop\{padding:0;overflow:hidden/);
-  assert.match(css, /--devis-quote-cols:minmax\(0,1\.7fr\) 68px 88px 72px 72px 96px 112px/);
+  assert.match(css, /--devis-quote-cols:minmax\(0,1\.7fr\) 64px 118px 68px 64px 118px 112px/);
   assert.match(css, /\.devis-wizard \.quote-line\{grid-template-columns:var\(--devis-quote-cols\)/);
 });
 

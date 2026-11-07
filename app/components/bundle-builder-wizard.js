@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -34,6 +34,7 @@ import {
   buildPickerCrumbs,
   bundleLineTotal,
   bundleTotalHt,
+  isPhotovoltaicBundle,
   hydratePickerPath,
   moveBundleItems,
   normalizeBundle,
@@ -43,6 +44,9 @@ import {
   pickerVariants,
   persistPickerSubcategory,
   subfamilyHasVariants,
+  forfaitPriceLabel,
+  frenchDecimalText,
+  parseFrenchDecimal,
   priceTtc,
   searchArticlesByReference,
   suggestBundleName,
@@ -113,6 +117,9 @@ export default function BundleBuilderWizard({
       : initialItems
   ));
   const [name, setName] = useState(bundle?.name || "");
+  const [pricingMode, setPricingMode] = useState(normalizedBundle?.pricingMode || "detail");
+  const [forfaitHt, setForfaitHt] = useState(normalizedBundle?.forfaitHt ?? "");
+  const [forfaitTax, setForfaitTax] = useState(normalizedBundle?.forfaitTax ?? 20);
   const [error, setError] = useState("");
 
   const categoryCards = useMemo(
@@ -171,6 +178,8 @@ export default function BundleBuilderWizard({
     return mode ? arrangeRadiatorBundleItems(next, articles, options) : next;
   }
   const total = bundleTotalHt({ items });
+  const photovoltaic = isPhotovoltaicBundle({ category: category?.name || "" });
+  const useForfait = photovoltaic && pricingMode === "forfait";
   const composeCopy = {
     principal: accessoryKind === "installation"
       ? {
@@ -370,6 +379,11 @@ export default function BundleBuilderWizard({
       restartPath();
       return;
     }
+    const forfaitAmount = parseFrenchDecimal(forfaitHt);
+    if (useForfait && forfaitAmount == null) {
+      setError("Indiquez le montant du forfait.");
+      return;
+    }
     const first = savedItems[0];
     const payloadBase = {
       ...(bundle || {}),
@@ -379,6 +393,9 @@ export default function BundleBuilderWizard({
       brand: brandName || first.brand || "",
       family: persistSubcategory?.name || category?.name || first.subcategory || first.category || "",
       items: savedItems,
+      pricingMode: useForfait ? "forfait" : "detail",
+      forfaitHt: useForfait ? forfaitAmount : null,
+      forfaitTax: useForfait ? Number(forfaitTax) : null,
     };
     const payload = normalizeBundle({
       ...payloadBase,
@@ -590,6 +607,38 @@ export default function BundleBuilderWizard({
                   ))))}
                 />
               ) : (
+              <>
+              {photovoltaic && (
+                <div className="bundle-forfait">
+                  <label className="is-check">
+                    <input
+                      type="checkbox"
+                      checked={useForfait}
+                      onChange={event => {
+                        const next = event.target.checked;
+                        setPricingMode(next ? "forfait" : "detail");
+                        if (next && parseFrenchDecimal(forfaitHt) == null) setForfaitHt(frenchDecimalText(total));
+                      }}
+                    />
+                    Tarif unique
+                  </label>
+                  {useForfait && (
+                    <>
+                      <label>Montant du forfait HT
+                        <FrenchDecimalField ariaLabel="Montant du forfait HT" value={forfaitHt} onValue={setForfaitHt} />
+                      </label>
+                      <label>TVA
+                        <select aria-label="TVA du forfait" value={forfaitTax} onChange={event => setForfaitTax(Number(event.target.value))}>
+                          <option value="0">0 %</option>
+                          <option value="5.5">5,5 %</option>
+                          <option value="10">10 %</option>
+                          <option value="20">20 %</option>
+                        </select>
+                      </label>
+                    </>
+                  )}
+                </div>
+              )}
               <section className="bundle-review-block">
                 <b>Ordre dans le groupe</b>
                 {!items.length ? <span className="bundle-review-empty">Aucun article</span> : items.map((item, index) => (
@@ -604,13 +653,16 @@ export default function BundleBuilderWizard({
                       <strong>{item.name}</strong>
                     </span>
                     <em>× {item.qty}</em>
-                    <b>{money(bundleLineTotal(item))}</b>
+                    {useForfait
+                      ? (index === 0 && parseFrenchDecimal(forfaitHt) != null ? <b>{forfaitPriceLabel(parseFrenchDecimal(forfaitHt), forfaitTax)}</b> : null)
+                      : <b>{money(bundleLineTotal(item))}</b>}
                     <button type="button" onClick={() => removeItem(index)} aria-label="Retirer"><Trash2 size={14} /></button>
                   </div>
                 ))}
               </section>
+              </>
               )}
-              <div className="bundle-review-total"><span>Total HT du groupe</span><b>{money(total)}</b></div>
+              {!useForfait && <div className="bundle-review-total"><span>Total HT du groupe</span><b>{money(total)}</b></div>}
               <div className="wizard-create-actions">
                 <button type="button" className="wizard-ghost" onClick={restartPath}>
                   <Plus size={16} /> Ajouter un autre article
@@ -640,7 +692,7 @@ function RadiatorGroupReview({ items, choices, onQty, onRemove, onAccessory, onA
             <small>{item.code}</small>
             <strong>{item.name}</strong>
           </span>
-          <input type="number" min="1" step="1" aria-label={`Quantité ${item.name}`} value={item.qty} onChange={event => onQty(index, "qty", event.target.value)} />
+          <FrenchDecimalField ariaLabel={`Quantité ${item.name}`} value={item.qty} onValue={qty => onQty(index, "qty", qty)} />
           <b>{money(bundleLineTotal(item))}</b>
           <button type="button" onClick={() => onRemove(index)} aria-label={`Retirer ${item.name}`}><Trash2 size={14} /></button>
         </div>
@@ -659,7 +711,7 @@ function RadiatorGroupReview({ items, choices, onQty, onRemove, onAccessory, onA
       {accessory && (
         <label className="bundle-radiator-slot">
           Quantité de l’accessoire
-          <input type="number" min="0.01" step="1" aria-label="Quantité de l’accessoire" value={accessory.qty} onChange={event => onAccessoryQty(event.target.value)} />
+          <FrenchDecimalField ariaLabel="Quantité de l’accessoire" value={accessory.qty} onValue={onAccessoryQty} />
         </label>
       )}
       <p className="bundle-radiator-install">
@@ -670,6 +722,38 @@ function RadiatorGroupReview({ items, choices, onQty, onRemove, onAccessory, onA
         {installation ? <b>× {installation.qty}</b> : null}
       </p>
     </section>
+  );
+}
+
+function FrenchDecimalField({ value, onValue, ariaLabel }) {
+  const [text, setText] = useState(() => frenchDecimalText(value));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (focused.current) return;
+    setText(frenchDecimalText(value));
+  }, [value]);
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      aria-label={ariaLabel}
+      value={text}
+      onFocus={() => { focused.current = true; }}
+      onBlur={() => {
+        focused.current = false;
+        const amount = parseFrenchDecimal(text);
+        setText(amount == null ? frenchDecimalText(value) : frenchDecimalText(amount));
+        if (amount != null) onValue(amount);
+      }}
+      onChange={event => {
+        const next = event.target.value.replace(".", ",");
+        if (next !== "" && !/^[\d\s\u202f\u00a0]*([,]\d*)?$/.test(next)) return;
+        setText(next);
+        const amount = parseFrenchDecimal(next);
+        if (amount != null) onValue(amount);
+      }}
+    />
   );
 }
 
@@ -732,7 +816,7 @@ function ComposeStep({
                   </div>
                   <div className="wizard-material-prices">
                     <span><small>HT</small><b>{money(article.sell)}</b></span>
-                    <span><small>TVA</small><b>{article.tax}%</b></span>
+                    <span><small>TVA</small><b>{formatTaxRate(article.tax)}</b></span>
                     <span><small>TTC</small><b>{money(priceTtc(article.sell, article.tax))}</b></span>
                   </div>
                   <div className="wizard-material-foot">
@@ -762,7 +846,8 @@ function ComposeStep({
                 <button type="button" onClick={() => onMove(index, 1)} disabled={index === items.length - 1} aria-label="Descendre"><ChevronDown size={14} /></button>
               </div>
               <span>{item.name}</span>
-              <input type="number" min="0.01" step="0.01" value={item.qty} onChange={e => onUpdate(index, "qty", Number(e.target.value))} aria-label="Quantité" />
+              <b className="bundle-compose-price">{money(bundleLineTotal(item))}</b>
+              <FrenchDecimalField ariaLabel="Quantité" value={item.qty} onValue={qty => onUpdate(index, "qty", qty)} />
               <button type="button" onClick={() => onRemove(index)} aria-label="Retirer"><Trash2 size={14} /></button>
             </div>
           ))}

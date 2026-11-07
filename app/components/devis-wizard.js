@@ -38,6 +38,9 @@ import { interpretDevisVoice, voiceChoiceResult } from "../lib/devis-voice";
 import { isAdminVip } from "../lib/permissions";
 import DevisVoiceBar from "./devis-voice-bar";
 import QuoteBundleHeading from "./quote-bundle-heading";
+import QuoteLinePrices from "./quote-line-prices";
+import PvBundleOptions from "./pv-bundle-options";
+import { pvBundleNeedsOptions } from "../lib/pv-quote-options";
 import {
   DEVIS_FINANCIERS,
   ELECTRICITY_OPERATORS,
@@ -68,6 +71,14 @@ import { downloadArticleCommercialDoc, quoteCommercialDocs } from "../lib/articl
 
 const euro = value =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(Number(value || 0));
+
+function quoteSummaryPrice(item, priced) {
+  if (item?.forfait) {
+    if (priced?.forfaitCarrier) return `${euro(priced.totalHT)} HT · ${euro(priced.totalTTC)} TTC`;
+    return "inclus dans le prix unique";
+  }
+  return euro(priced?.totalTTC || item?.unit || 0);
+}
 
 function prospectDirectoryItem(prospect) {
   const split = splitPersonName(prospect.name);
@@ -702,7 +713,6 @@ export default function DevisWizard({
                   <div className={`quote-line ${item.hiddenOnPrint ? "is-hidden" : ""}`} key={`${item.id || "line"}-${index}`}>
                     <span className="quote-line-article">
                       <input aria-label="Désignation" value={item.name || ""} onChange={event => updateLine(item.id, "name", event.target.value)} placeholder={prepared ? "Ligne libre (facultatif)" : "Désignation"} />
-                      <input aria-label="Commentaire" value={item.lineComment || ""} onChange={event => updateLine(item.id, "lineComment", event.target.value)} placeholder="Commentaire" />
                       {isRadiatorMachineArticle(item) && (
                         <label className="quote-radiator-slot">
                           Pied ou roulette
@@ -726,12 +736,7 @@ export default function DevisWizard({
                       )}
                     </span>
                     <input type="number" min="0.01" step="0.01" value={item.qty} onChange={event => updateLine(item.id, "qty", event.target.value)} />
-                    <input type="number" min="0" step="0.01" value={item.unit} disabled={!canPrice} onChange={event => updateLine(item.id, "unit", event.target.value)} />
-                    <select value={item.tax ?? state.tax} disabled={!canPrice} onChange={event => updateLine(item.id, "tax", Number(event.target.value))}>
-                      <option value="0">0 %</option><option value="5.5">5,5 %</option><option value="10">10 %</option><option value="20">20 %</option>
-                    </select>
-                    <input type="number" min="0" step="0.01" value={item.discountValue || 0} disabled={!canPrice} onChange={event => updateLine(item.id, "discountValue", event.target.value)} />
-                    <b>{euro(priced?.totalTTC || 0)}</b>
+                    <QuoteLinePrices item={item} tax={state.tax} priced={priced} canPrice={canPrice} onChange={(field, value) => updateLine(item.id, field, value)} />
                     <div className="devis-line-tools">
                       {!prepared && <button type="button" onClick={() => moveLine(index, -1)} aria-label="Monter">↑</button>}
                       {!prepared && <button type="button" onClick={() => moveLine(index, 1)} aria-label="Descendre">↓</button>}
@@ -739,6 +744,15 @@ export default function DevisWizard({
                       {!prepared && <button type="button" onClick={() => patch({ items: quoteItems(state.items.filter(line => line.id !== item.id && String(line.radiatorFor) !== String(item.id))) })}><Trash2 size={15} /></button>}
                     </div>
                   </div>,
+                  pvBundleNeedsOptions(lines, index) && (
+                    <PvBundleOptions
+                      key={`pv-options-${item.bundleId || item.bundleName || index}`}
+                      items={lines}
+                      index={index}
+                      articles={articles}
+                      onChange={next => patch({ items: quoteItems(next) })}
+                    />
+                  ),
                   ];
                 })}
               </div>
@@ -942,7 +956,10 @@ export default function DevisWizard({
                 {state.siteDifferent && <p>Chantier : {[state.siteAddress, state.sitePostalCode, state.siteCity].filter(Boolean).join(" ")}</p>}
               </WizardSection>
               <WizardSection n="2" title="Produits" actions={<button type="button" className="wizard-link" onClick={() => goTo(1)}><Pencil size={14} />Modifier</button>}>
-                <ul>{filledQuoteItems(state.items).map(item => <li key={item.id}>{item.qty} × {item.name} — {euro(item.unit)}</li>)}</ul>
+                <ul>{filledQuoteItems(state.items).map(item => {
+                  const priced = totals.lines.find(line => String(line.id) === String(item.id));
+                  return <li key={item.id}>{item.qty} × {item.name} — {quoteSummaryPrice(item, priced)}</li>;
+                })}</ul>
                 <p className="devis-wizard-summary-total">Total HT {euro(totals.totalHT)} · TVA {euro(totals.taxAmount)} · <b>Total TTC {euro(totals.totalTTC)}</b></p>
               </WizardSection>
               <WizardSection n="3" title="Conditions" actions={<button type="button" className="wizard-link" onClick={() => goTo(2)}><Pencil size={14} />Modifier</button>}>

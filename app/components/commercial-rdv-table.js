@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Pencil } from "lucide-react";
-import { ClientPhoneLink } from "./address-call-notice";
 import {
   AGENDA_STATUSES,
   rdvStatusTone,
@@ -120,7 +119,6 @@ export default function CommercialRdvTable({
         <span>Prospecteur</span>
         <span>Code postal</span>
         <span>Ville</span>
-        <span>Tél.</span>
       </div>
       {table.rows.length === 0 && <div className="empty">Aucun rendez-vous commercial pour ces filtres.</div>}
       {table.rows.map(row => (
@@ -144,7 +142,6 @@ export default function CommercialRdvTable({
           <span>{row.prospector || "—"}</span>
           <span>{row.postalCode || "—"}</span>
           <span>{row.city || "—"}</span>
-          <span>{row.phone ? <ClientPhoneLink phone={row.phone} person={{ id: row.clientId || "", address: row.address || "", postalCode: row.postalCode, city: row.city }}>{row.phone}</ClientPhoneLink> : "—"}</span>
         </div>
       ))}
     </div>

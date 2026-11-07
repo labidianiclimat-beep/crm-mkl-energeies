@@ -8,14 +8,17 @@ import {
   formToBundleRecord,
   isMissingBundleTable,
   orgArticlesSelectPath,
+  readBundleRows,
   validateBundlePayload,
+  writeBundleRows,
 } from "../../../lib/article-bundles";
 import { serviceRequest, serviceRoleConfigured } from "../../../lib/supabase-server";
 
 export const runtime = "nodejs";
 
 async function loadBundle(orgId, id) {
-  const rows = await serviceRequest(
+  const rows = await readBundleRows(
+    serviceRequest,
     `/rest/v1/article_bundles?select=${BUNDLE_SELECT}&organization_id=eq.${encodeURIComponent(orgId)}&id=eq.${encodeURIComponent(id)}&limit=1`
   );
   return rows?.[0] || null;
@@ -78,7 +81,8 @@ export async function PATCH(request, { params }) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
     }
 
-    const rows = await serviceRequest(
+    const rows = await writeBundleRows(
+      serviceRequest,
       `/rest/v1/article_bundles?id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(auth.profile.organization_id)}`,
       {
         method: "PATCH",

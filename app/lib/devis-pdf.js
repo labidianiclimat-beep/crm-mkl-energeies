@@ -6,7 +6,7 @@ import {
   DEFAULT_COMPANY,
 } from "./company.js";
 import { formatClientNumber } from "./client-number.js";
-import { computeDocumentTotals, firstMonthlyDelayLabel, quoteBillingAddress, quoteWorksiteAddress } from "./devis.js";
+import { computeDocumentTotals, firstMonthlyDelayLabel, photovoltaicGroupTitle, quoteBillingAddress, quoteWorksiteAddress } from "./devis.js";
 
 function articleDescriptionText(item) {
   const name = String(item.name || "").trim();
@@ -50,7 +50,9 @@ const COLS = [
 ];
 
 function pdfLatin(value) {
-  return String(value ?? "").replace(/[\u00a0\u202f\u2007\u2009]/g, " ");
+  return String(value ?? "")
+    .replace(/[\u00a0\u202f\u2007\u2009]/g, " ")
+    .replace(/[\u2012\u2013\u2014\u2015]/g, "-");
 }
 
 export function euro(value) {
@@ -310,6 +312,22 @@ function ensureSpace(ctx, height) {
   newPage(ctx);
 }
 
+function drawPvGroupTitle(ctx, title) {
+  const { pdf } = ctx;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(10);
+  const lines = wrap(pdf, pdfLatin(title), INNER_W - 4);
+  const h = 2.4 + lines.length * 4.4;
+  ensureSpace(ctx, h + 6);
+  setFill(pdf, [21, 35, 71]);
+  pdf.rect(MX, ctx.y, INNER_W, h, "F");
+  setInk(pdf, [255, 204, 0]);
+  lines.forEach((line, index) => {
+    pdf.text(line, MX + 2, ctx.y + 4.2 + index * 4.4);
+  });
+  ctx.y += h + 1.4;
+}
+
 function drawArticle(ctx, item, { continued = false, remainingNote } = {}) {
   const { pdf } = ctx;
   const cols = colXs();
@@ -318,14 +336,23 @@ function drawArticle(ctx, item, { continued = false, remainingNote } = {}) {
   const code = String(item.code || item.reference || "").trim();
   const note = remainingNote != null ? remainingNote : articleDescriptionText(item);
   const unitTtc = Number(item.unit) * (1 + Number(item.tax || 0) / 100);
-  const nums = [
-    String(item.qty ?? ""),
-    euro(Number(item.unit)),
-    euro(unitTtc),
-    taxLabel(item.tax),
-    euro(item.totalHT),
-    euro(item.totalTTC),
-  ];
+  const nums = item.forfait
+    ? [
+        String(item.qty ?? ""),
+        item.forfaitCarrier ? euro(item.totalHT) : "",
+        item.forfaitCarrier ? euro(item.totalTTC) : "",
+        item.forfaitCarrier ? taxLabel(item.tax) : "",
+        item.forfaitCarrier ? euro(item.totalHT) : "",
+        item.forfaitCarrier ? euro(item.totalTTC) : "",
+      ]
+    : [
+        String(item.qty ?? ""),
+        euro(Number(item.unit)),
+        euro(unitTtc),
+        taxLabel(item.tax),
+        euro(item.totalHT),
+        euro(item.totalTTC),
+      ];
 
   ensureSpace(ctx, continued ? 10 : 14);
   if (continued) {
@@ -576,7 +603,11 @@ export async function buildDevisPdfBlob(doc, {
   drawParties(ctx, company, customer);
   drawWorksite(ctx, customer.worksite);
   drawColHead(ctx);
-  printableLines.forEach(item => drawArticle(ctx, item));
+  printableLines.forEach((item, index) => {
+    const title = photovoltaicGroupTitle(printableLines, index);
+    if (title) drawPvGroupTitle(ctx, title);
+    drawArticle(ctx, item);
+  });
   if (noteParts.length) {
     drawNote(ctx, doc.specialConditions ? "CONDITIONS PARTICULIÈRES" : "", noteParts.join("\n\n"));
   }

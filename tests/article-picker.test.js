@@ -219,7 +219,7 @@ test("photovoltaic labor stays inside the family as a subcategory", () => {
 test("photovoltaique propose micro-onduleur a cote des onduleurs", () => {
   const pv = pickerCategories([], []).find(item => item.name === "Photovoltaïque");
   const names = pickerSubcategories(pv, [], []).map(item => item.name);
-  assert.deepEqual(names, ["Panneaux", "Onduleurs", "Micro-onduleur", "Batteries", "Optimiseur", "Main-d’œuvre"]);
+  assert.deepEqual(names, ["Panneaux", "Onduleurs", "Micro-onduleur", "Batteries", "Optimiseur", "Petites fournitures", "Main-d’œuvre"]);
   const catalog = [
     { id: "p1", code: "PV-P", name: "Panneau Dualsun", category: "Photovoltaïque", subcategory: "Panneaux", sell: 189, tax: 20, status: "Actif" },
     { id: "o1", code: "PV-O", name: "Onduleur 6 kW", category: "Photovoltaïque", subcategory: "Onduleurs", sell: 980, tax: 20, status: "Actif" },
@@ -241,7 +241,10 @@ test("photovoltaique propose micro-onduleur a cote des onduleurs", () => {
   assert.equal(micro.count, 2);
   assert.equal(optimiseur.count, 1);
   assert.equal(labor.count, 1);
-  assert.ok(tabs.findIndex(item => item.name === "Optimiseur") === tabs.findIndex(item => item.name === "Main-d’œuvre") - 1);
+  assert.ok(tabs.findIndex(item => item.name === "Optimiseur") === tabs.findIndex(item => item.name === "Petites fournitures") - 1);
+  assert.ok(tabs.findIndex(item => item.name === "Petites fournitures") === tabs.findIndex(item => item.name === "Main-d’œuvre") - 1);
+  const suppliesSql = readFileSync(new URL("../supabase/migrations/20261106_pv_petites_fournitures.sql", import.meta.url), "utf8");
+  assert.match(suppliesSql, /Petites fournitures/);
   assert.deepEqual(articlesForPath(catalog, { category: pv, subcategory: onduleurs }).map(item => item.code), ["PV-O"]);
   assert.deepEqual(articlesForPath(catalog, { category: pv, subcategory: micro }).map(item => item.code).sort(), ["PV-M", "PV-M2"]);
   const sql = readFileSync(new URL("../supabase/migrations/20260933_pv_micro_onduleur.sql", import.meta.url), "utf8");

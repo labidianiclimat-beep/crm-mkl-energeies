@@ -29,7 +29,7 @@ const DEVIS_SELECT =
   "id,organization_id,kind,numero_devis,client_id,client_name,commercial_id,statut,date_creation,date_validite,date_livraison,total_ht,total_tva,total_ttc,remise_globale_type,remise_globale,acompte,reste_a_payer,conditions_reglement,observations,label,tax_default,financier,financed_amount,finance_months,monthly_payment,electricity_operator,pv_power_kwp,pv_study_id,extra,created_at,updated_at,created_by";
 
 const LINE_SELECT =
-  "id,devis_id,article_id,reference,designation,description,quantite,unite,prix_unitaire_ht,remise_type,remise,taux_tva,total_ht,total_tva,total_ttc,categorie,sous_categorie,bundle_id,bundle_name,ordre";
+  "id,devis_id,article_id,reference,designation,description,quantite,unite,prix_unitaire_ht,remise_type,remise,taux_tva,total_ht,total_tva,total_ttc,categorie,sous_categorie,bundle_id,bundle_name,forfait,forfait_montant_ht,ordre";
 
 async function loadLines(devisIds) {
   if (!devisIds.length) return {};
@@ -188,7 +188,6 @@ export async function POST(request) {
     if (errors.length) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
     }
-
     header.numero_devis = await allocateNumber(auth.profile.organization_id, header.kind);
     header.created_at = new Date().toISOString();
 

@@ -102,6 +102,82 @@ test("le devis PDF natif contient le texte du modèle", async () => {
   assert.ok(pages >= 2, `attendu au moins 2 pages, obtenu ${pages}`);
 });
 
+test("le forfait photovoltaïque écrit le TTC dans la colonne P.U TTC", async () => {
+  const blob = await buildDevisPdfBlob({
+    kind: "Devis",
+    number: "DEV-MICRO",
+    date: "2026-11-06",
+    due: "2026-12-06",
+    client: "Client Test",
+    items: [
+      {
+        name: "JINKO SOLAR 54HL4M-BDV-500 W",
+        qty: 9,
+        unit: 0,
+        tax: 5.5,
+        forfait: true,
+        forfaitHt: 13127.96,
+        description: "PANNEAU\nType de cellule : Monocristallin",
+      },
+      {
+        name: "MICRO-ONDULEUR ENPHASE IQ9N-A-INT",
+        qty: 9,
+        unit: 0,
+        tax: 0,
+        forfait: true,
+        forfaitHt: null,
+        description: "MICRO-ONDULEUR\nMarque : Enphase",
+      },
+    ],
+  }, { logoData: "", clients: [{ name: "Client Test" }], company: { legalName: "MKL Énergies" } });
+  const raw = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  assert.equal((raw.match(/13 850/g) || []).length, 3);
+  assert.match(raw, /13 128/);
+  assert.match(raw, /Type de cellule : Monocristallin/);
+  assert.match(raw, /Marque : Enphase/);
+});
+
+test("le PDF imprime le titre d un groupe photovoltaïque", async () => {
+  const blob = await buildDevisPdfBlob({
+    kind: "Devis",
+    number: "DEV-PV-TITRE",
+    date: "2026-11-06",
+    due: "2026-12-06",
+    client: "Client Test",
+    items: [
+      {
+        name: "JINKO SOLAR 54HL4M-BDV-500 W",
+        category: "Photovoltaïque",
+        subcategory: "Panneaux",
+        qty: 9,
+        unit: 0,
+        tax: 5.5,
+        forfait: true,
+        forfaitHt: 13127.96,
+        bundleId: "pv-1",
+        bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs",
+        description: "PANNEAU\nType de cellule",
+      },
+      {
+        name: "MICRO-ONDULEUR ENPHASE IQ9N-A-INT",
+        category: "Photovoltaïque",
+        subcategory: "Micro-onduleur",
+        qty: 9,
+        unit: 0,
+        tax: 0,
+        forfait: true,
+        bundleId: "pv-1",
+        bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs",
+        description: "MICRO-ONDULEUR",
+      },
+    ],
+  }, { logoData: "", clients: [{ name: "Client Test" }], company: { legalName: "MKL Énergies" } });
+  const raw = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  assert.match(raw, /Jinko Solar - 4,5 kW monophasé - micro-onduleurs/);
+  assert.equal((raw.match(/Jinko Solar/g) || []).length, 1);
+  assert.match(raw, /Type de cellule/);
+});
+
 test("le PDF devis n affiche pas le surtitre du groupe", async () => {
   const blob = await buildDevisPdfBlob({
     kind: "Devis",

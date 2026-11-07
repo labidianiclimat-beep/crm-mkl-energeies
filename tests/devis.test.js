@@ -6,6 +6,7 @@ import {
   computeDocumentTotals,
   isQuoteBundleStart,
   quoteArticleRefs,
+  photovoltaicGroupTitle,
   quoteBundleHeading,
   setQuoteBundleHeading,
   defaultQuoteDeliveryDate,
@@ -45,6 +46,47 @@ test("le surtitre d un groupe s applique a toutes ses lignes", () => {
   assert.equal(quoteBundleHeading(next[0]), "Installation climatisation");
   assert.equal(quoteBundleHeading(next[1]), "Installation climatisation");
   assert.equal(quoteBundleHeading(next[2]), "Pack PAC");
+  const pv = [
+    { name: "Panneau 500 W", category: "Photovoltaïque", bundleId: "pv", bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs" },
+    { name: "Micro-onduleur", category: "Photovoltaïque", bundleId: "pv", bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs" },
+  ];
+  assert.equal(photovoltaicGroupTitle(pv, 0), "Jinko Solar — 4,5 kW monophasé — micro-onduleurs");
+  assert.equal(photovoltaicGroupTitle(pv, 1), "");
+  assert.equal(photovoltaicGroupTitle(next, 0), "");
+});
+
+test("le total d un groupe micro-onduleur compte le prix unique", () => {
+  const totals = computeDocumentTotals({
+    tax: 20,
+    items: [
+      {
+        name: "JINKO SOLAR 54HL4M-BDV-500 W",
+        qty: 9,
+        unit: 0,
+        tax: 5.5,
+        forfait: true,
+        forfaitHt: 13127.96,
+        bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs",
+      },
+      {
+        name: "MICRO-ONDULEUR ENPHASE IQ9N-A-INT",
+        qty: 9,
+        unit: 0,
+        tax: 0,
+        forfait: true,
+        forfaitHt: null,
+        bundleName: "Jinko Solar — 4,5 kW monophasé — micro-onduleurs",
+      },
+      { name: "Raccordement sans Linky", qty: 1, unit: 947.87, tax: 5.5 },
+    ],
+  });
+  assert.equal(Number(totals.lines[0].totalTTC.toFixed(2)), 13850);
+  assert.equal(totals.lines[1].totalTTC, 0);
+  assert.equal(Number(totals.totalTTC.toFixed(2)), 14850);
+  const page = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  const route = readFileSync(new URL("../app/api/devis/[id]/route.js", import.meta.url), "utf8");
+  assert.match(page, /function billingTotals\(document\) \{\s*return computeDocumentTotals\(document\);\s*\}/);
+  assert.match(route, /loadLines\(id\)\)\.map\(lineToUi\)/);
 });
 
 test("computes line and document totals with discounts", () => {

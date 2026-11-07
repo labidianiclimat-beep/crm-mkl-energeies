@@ -28,7 +28,8 @@ import {
   buildPickerCrumbs,
   buildQuoteLineFromArticle,
   buildQuoteLinesFromBundle,
-  bundleTotalHt,
+  bundleDisplayedTotalHt,
+  bundleUsesForfait,
   bundleMatchesPath,
   bundlesForPath,
   isBundleActive,
@@ -41,6 +42,8 @@ import {
   pickerVariants,
   subfamilyHasVariants,
   articlesForPath,
+  forfaitPriceLabel,
+  formatTaxRate,
   priceTtc,
   resolveBundlePath,
 } from "../lib/article-picker";
@@ -61,7 +64,7 @@ import {
   heatPumpRemovalQuoteLines,
   heatPumpTankRemovalById,
 } from "../lib/heat-pump-removal";
-import { PV_QUOTE_SIZES, bundleMatchesPvSize, pvQuoteSizeById } from "../lib/pv-quote-sizes";
+import { PV_QUOTE_SIZES, bundleMatchesPvSize, bundleUsesMicroInverter, pvQuoteSizeById } from "../lib/pv-quote-sizes";
 import { isRadiatorBundle } from "../lib/radiator-bundle";
 import { isHeatPumpPath } from "../lib/heat-pump-specs";
 import { isClimOutdoorPath } from "../lib/clim-outdoor-specs";
@@ -145,6 +148,7 @@ export default function ArticlePickerWizard({
   const [boilerRemovalId, setBoilerRemovalId] = useState("");
   const [tankRemovalId, setTankRemovalId] = useState("");
   const [pvSizeId, setPvSizeId] = useState("");
+  const [pvInverterKind, setPvInverterKind] = useState("central");
   const ensuredBundles = useRef(false);
 
   useEffect(() => {
@@ -245,9 +249,11 @@ export default function ArticlePickerWizard({
     return (bundles || []).filter(bundle => {
       if (!includeInactive && !isBundleActive(bundle)) return false;
       if (!bundleMatchesPvSize(bundle, pvSize)) return false;
+      const micro = bundleUsesMicroInverter(bundle);
+      if (pvInverterKind === "micro" ? !micro : micro) return false;
       return !needle || matchesBundleSearch(bundle, needle);
     });
-  }, [bundles, pvSize, includeInactive, query]);
+  }, [bundles, pvSize, pvInverterKind, includeInactive, query]);
 
   const crumbs = buildPickerCrumbs({ category, subcategory, variant, brand: brandName, step });
   const selectedBrand = (brandCatalog || []).find(item => taxonomyNamesEqual(item.name, brandName))
@@ -315,6 +321,7 @@ export default function ArticlePickerWizard({
     setBrandName("");
     setQuery("");
     setPvSizeId("");
+    setPvInverterKind("central");
     if (pickIntent === "groups" && taxonomyNamesEqual(item.name, "Photovoltaïque")) {
       setStep("pv-sizes");
       return;
@@ -322,8 +329,9 @@ export default function ArticlePickerWizard({
     setStep("subcategories");
   }
 
-  function openPvSize(sizeId) {
+  function openPvSize(sizeId, kind) {
     setPvSizeId(sizeId);
+    setPvInverterKind(kind === "micro" ? "micro" : "central");
     setQuery("");
     setStep("pv-groups");
   }
@@ -392,7 +400,10 @@ export default function ArticlePickerWizard({
     setPendingRemoval(null);
     setBoilerRemovalId("");
     setTankRemovalId("");
-    if (targetStep === "categories") setPvSizeId("");
+    if (targetStep === "categories") {
+      setPvSizeId("");
+      setPvInverterKind("central");
+    }
     setStep(targetStep);
   }
 
@@ -874,7 +885,7 @@ export default function ArticlePickerWizard({
                             </span>
                             <span>
                               <small>TVA</small>
-                              <b>{article.tax}%</b>
+                              <b>{formatTaxRate(article.tax)}</b>
                             </span>
                             <span>
                               <small>TTC</small>
@@ -905,7 +916,9 @@ export default function ArticlePickerWizard({
                 ) : (
                   <div className="wizard-material-grid">
                     {matchingBundles.map(bundle => {
-                      const total = bundleTotalHt(bundle);
+                      const forfait = bundleUsesForfait(bundle);
+                      const total = bundleDisplayedTotalHt(bundle);
+                      const shownTax = forfait ? Number(bundle.forfaitTax ?? 20) : defaultTax;
                       const path = resolveBundlePath(bundle);
                       return (
                         <article key={bundle.id} className="wizard-material-card wizard-bundle-card">
@@ -927,27 +940,29 @@ export default function ArticlePickerWizard({
                             {(bundle.items || []).slice(0, 4).map((item, index) => (
                               <li key={`${item.code || item.name}-${index}`}>
                                 <span>{item.name}</span>
-                                <b>{money(item.price)}</b>
+                                {forfait
+                                  ? (index === 0 ? <b>{forfaitPriceLabel(total, bundle.forfaitTax)}</b> : null)
+                                  : <b>{money(item.price)}</b>}
                               </li>
                             ))}
                             {(bundle.items || []).length > 4 && (
                               <li className="more">+ {(bundle.items || []).length - 4} autre{(bundle.items || []).length - 4 > 1 ? "s" : ""}</li>
                             )}
                           </ul>
-                          <div className="wizard-material-prices">
+                          {!forfait && <div className="wizard-material-prices">
                             <span>
                               <small>Total HT</small>
                               <b>{money(total)}</b>
                             </span>
                             <span>
                               <small>TVA</small>
-                              <b>{defaultTax}%</b>
+                              <b>{formatTaxRate(shownTax)}</b>
                             </span>
                             <span>
                               <small>TTC env.</small>
-                              <b>{money(priceTtc(total, defaultTax))}</b>
+                              <b>{money(priceTtc(total, shownTax))}</b>
                             </span>
-                          </div>
+                          </div>}
                           <div className="wizard-material-foot">
                             <span className="wizard-status on">Groupe</span>
                             <button type="button" className="wizard-primary" onClick={() => addBundle(bundle)}>
@@ -964,26 +979,35 @@ export default function ArticlePickerWizard({
           )}
 
           {step === "pv-sizes" && (
-            <div className="pv-size-step">
+            <div className="pv-size-step pv-size-picker">
               <div className="wizard-toolbar">
                 <button type="button" className="wizard-link" onClick={goBack}>← Toutes les catégories</button>
               </div>
               <b className="bundle-compose-title">Puissance photovoltaïque</b>
               <span className="bundle-compose-hint">Chaque dessin compte les panneaux. Le choix ouvre les groupes de cette puissance.</span>
-              <div className="pv-size-grid">
-                {PV_QUOTE_SIZES.map(size => (
-                  <article key={size.id} className="pv-size-card">
-                    <span className="pv-size-panels" style={{ gridTemplateColumns: `repeat(${size.columns}, 10px)` }} aria-hidden="true">
-                      {Array.from({ length: size.panels }, (_, index) => <i key={index} />)}
-                    </span>
-                    <b>{size.kwLabel} {size.phaseLabel}</b>
-                    <small>{size.panels} panneaux</small>
-                    <button type="button" className="wizard-primary" onClick={() => openPvSize(size.id)}>
-                      Choisir
-                    </button>
-                  </article>
-                ))}
-              </div>
+              {[
+                { id: "central", title: "Photovoltaïque — onduleur centralisé" },
+                { id: "micro", title: "Micro-onduleur" },
+              ].map(section => (
+                <section key={section.id} className="pv-size-section">
+                  <b>{section.title}</b>
+                  <div className="pv-size-grid">
+                    {PV_QUOTE_SIZES.map(size => (
+                      <article key={`${section.id}-${size.id}`} className="pv-size-card">
+                        <span className="pv-size-panels" style={{ gridTemplateColumns: `repeat(${size.columns}, 10px)` }} aria-hidden="true">
+                          {Array.from({ length: size.panels }, (_, index) => <i key={index} />)}
+                        </span>
+                        <b>{size.kwLabel}</b>
+                        <em className="pv-size-phase">{size.phaseLabel}</em>
+                        <small>{size.panels} panneaux</small>
+                        <button type="button" className="wizard-primary" onClick={() => openPvSize(size.id, section.id)}>
+                          Choisir
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
 
@@ -994,12 +1018,12 @@ export default function ArticlePickerWizard({
                 <p className="wizard-pick-hint">{pvGroups.length} groupe{pvGroups.length > 1 ? "s" : ""}</p>
               </div>
               <b className="bundle-compose-title">{pvSize.kwLabel} {pvSize.phaseLabel}</b>
-              <span className="bundle-compose-hint">{pvSize.panels} panneaux. Les groupes créés pour cette puissance s’affichent ici.</span>
+              <span className="bundle-compose-hint">{pvInverterKind === "micro" ? "Micro-onduleur" : "Onduleur centralisé"}. {pvSize.panels} panneaux.</span>
               {!pvGroups.length ? (
                 <div className="wizard-empty">
                   <Library size={28} />
                   <b>Aucun groupe pour {pvSize.kwLabel} {pvSize.phaseLabel}</b>
-                  <span>Ils apparaîtront ici dès qu’un groupe portera « {pvSize.kwLabel} {pvSize.phaseLabel} » dans son nom.</span>
+                  <span>Un groupe s’affiche ici quand ses panneaux font {pvSize.kwLabel} et que son onduleur est {pvSize.phaseLabel}.</span>
                 </div>
               ) : (
                 <div className="wizard-material-grid">
@@ -1007,12 +1031,17 @@ export default function ArticlePickerWizard({
                     <article key={bundle.id} className="wizard-material-card wizard-bundle-card">
                       {bundle.name && <div className="quote-bundle-heading"><b>{bundle.name}</b></div>}
                       <ul className="wizard-bundle-items">
-                        {(bundle.items || []).slice(0, 4).map((item, index) => (
+                        {(bundle.items || []).slice(0, 4).map((item, index) => {
+                          const forfait = bundleUsesForfait(bundle);
+                          return (
                           <li key={`${item.code || item.name}-${index}`}>
                             <span>{item.name}</span>
-                            <b>{money(item.price)}</b>
+                            {forfait
+                              ? (index === 0 ? <b>{forfaitPriceLabel(bundleDisplayedTotalHt(bundle), bundle.forfaitTax)}</b> : null)
+                              : <b>{money(item.price)}</b>}
                           </li>
-                        ))}
+                          );
+                        })}
                       </ul>
                       <div className="wizard-material-foot">
                         <span className="wizard-status on">Groupe</span>

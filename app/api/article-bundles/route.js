@@ -8,7 +8,9 @@ import {
   formToBundleRecord,
   isMissingBundleTable,
   orgArticlesSelectPath,
+  readBundleRows,
   validateBundlePayload,
+  writeBundleRows,
 } from "../../lib/article-bundles";
 import { serviceRequest, serviceRoleConfigured } from "../../lib/supabase-server";
 
@@ -31,7 +33,7 @@ export async function GET(request) {
     let path = `/rest/v1/article_bundles?select=${BUNDLE_SELECT}&organization_id=eq.${encodeURIComponent(orgId)}&order=name.asc`;
     if (activeOnly) path += `&actif=eq.true`;
 
-    const rows = await serviceRequest(path);
+    const rows = await readBundleRows(serviceRequest, path);
     return Response.json({ bundles: (rows || []).map(bundleToUi) });
   } catch (error) {
     if (isMissingBundleTable(error)) {
@@ -64,7 +66,7 @@ export async function POST(request) {
     }
 
     record.created_at = new Date().toISOString();
-    const rows = await serviceRequest("/rest/v1/article_bundles", {
+    const rows = await writeBundleRows(serviceRequest, "/rest/v1/article_bundles", {
       method: "POST",
       headers: { Prefer: "return=representation" },
       body: record,

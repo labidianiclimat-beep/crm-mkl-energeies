@@ -97,6 +97,10 @@ test("maintenance, dépannage et installation partagent la semaine sans mélange
   assert.match(screen, /setSite\(\{ address: "", postal: "", city: "" \}\)/);
   assert.match(screen, /À faire/);
   assert.match(screen, /setTask\(""\)/);
+  assert.match(screen, /kind: "book"[\s\S]*task: ""/);
+  assert.match(screen, /description: draft\.task/);
+  const route = readFileSync(new URL("../app/api/entretien/tour/route.js", import.meta.url), "utf8");
+  assert.match(route, /action === "book"[\s\S]*?description: serviceTaskText\(body\.description\)/);
   assert.match(screen, /book-service/);
   assert.match(screen, /is-\$\{kind\}/);
   assert.match(css, /is-depannage/);

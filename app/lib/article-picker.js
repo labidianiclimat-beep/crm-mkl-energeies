@@ -1,6 +1,6 @@
 /** Parcours devis : Catégorie → Sous-catégorie → Marque → Article. */
 
-import { matchesArticleSearch, resolvedCatalogTax } from "./articles.js";
+import { ARTICLE_TAX_RATES, matchesArticleSearch, resolvedCatalogTax } from "./articles.js";
 import { findBrandLogo } from "./brands.js";
 import {
   isTaxonomyActive,
@@ -347,6 +347,12 @@ export const PICKER_SUBFAMILIES = {
       description: "Optimiseurs photovoltaïques",
       icon: "Sun",
       aliases: ["Optimiseur", "Optimiseurs", "Optimiseur photovoltaïque"],
+    },
+    {
+      name: "Petites fournitures",
+      description: "Câbles, connecteurs et accessoires",
+      icon: "Package",
+      aliases: ["Petites fournitures", "Petite fourniture"],
     },
     {
       name: "Main-d’œuvre",
@@ -1179,6 +1185,37 @@ export function bundleTotalHt(bundle) {
   return (bundle?.items || []).reduce((sum, item) => sum + bundleLineTotal(item), 0);
 }
 
+export function isPhotovoltaicBundle(bundle = {}) {
+  return taxonomyNamesEqual(bundle.category, "Photovoltaïque");
+}
+
+function readForfaitAmount(bundle = {}) {
+  const raw = bundle.forfaitHt ?? bundle.forfait_ht;
+  if (raw === "" || raw == null) return null;
+  const amount = Number(raw);
+  if (!Number.isFinite(amount)) return null;
+  return Math.max(0, Math.round(amount * 100) / 100);
+}
+
+function readForfaitTax(bundle = {}) {
+  const value = Number(bundle.forfaitTax ?? bundle.forfait_tva ?? 20);
+  return ARTICLE_TAX_RATES.includes(value) ? value : 20;
+}
+
+export function bundleUsesForfait(bundle = {}) {
+  const mode = bundle.pricingMode || bundle.pricing_mode;
+  return isPhotovoltaicBundle(bundle) && mode === "forfait";
+}
+
+export function bundleForfaitAmount(bundle = {}) {
+  return bundleUsesForfait(bundle) ? readForfaitAmount(bundle) : null;
+}
+
+export function bundleDisplayedTotalHt(bundle = {}) {
+  if (!bundleUsesForfait(bundle)) return bundleTotalHt(bundle);
+  return readForfaitAmount(bundle) || 0;
+}
+
 export const BUNDLE_ROLE_LABELS = {
   principal: "Matériel principal",
   supply: "Fournitures",
@@ -1238,6 +1275,9 @@ export function normalizeBundle(bundle = {}) {
     role: item.role || articleBundleRole(item),
   }));
   const active = isBundleActive(bundle);
+  const pricingMode = isPhotovoltaicBundle({ category: path.category }) && (bundle.pricingMode || bundle.pricing_mode) === "forfait"
+    ? "forfait"
+    : "detail";
   return {
     ...bundle,
     name: String(bundle.name || "").trim(),
@@ -1246,6 +1286,9 @@ export function normalizeBundle(bundle = {}) {
     brand: path.brand,
     family: bundle.family || path.subcategory || path.category,
     items,
+    pricingMode,
+    forfaitHt: pricingMode === "forfait" ? readForfaitAmount(bundle) : null,
+    forfaitTax: pricingMode === "forfait" ? readForfaitTax(bundle) : null,
     active,
     status: active ? "Actif" : "Inactif",
   };
@@ -1367,11 +1410,15 @@ export function hydratePickerPath(bundle, categories = [], subcategories = [], a
 
 export function buildQuoteLinesFromBundle(bundle, articles = [], { tax = 20, idBase = Date.now() } = {}) {
   if (!bundle) return [];
+  const forfait = bundleUsesForfait(bundle);
+  const forfaitHt = forfait ? readForfaitAmount(bundle) : null;
+  const forfaitTax = forfait ? readForfaitTax(bundle) : null;
   return (bundle.items || []).map((item, index) => {
     const article = (articles || []).find(row =>
       (item.articleId && String(row.id) === String(item.articleId))
       || (item.code && row.code === item.code)
     );
+    const carrier = forfait && index === 0;
     return {
       id: idBase + index,
       articleId: item.articleId || article?.id || null,
@@ -1381,12 +1428,14 @@ export function buildQuoteLinesFromBundle(bundle, articles = [], { tax = 20, idB
       category: item.category || article?.category || "",
       subcategory: item.subcategory || article?.subcategory || "",
       qty: Math.max(0.01, Number(item.qty || 1)),
-      unit: firstFiniteAmount(item.price, item.sell, article?.sell, article?.price),
-      tax: resolvedCatalogTax([article, item, bundle], tax),
+      unit: forfait ? 0 : firstFiniteAmount(item.price, item.sell, article?.sell, article?.price),
+      tax: forfait ? (carrier ? forfaitTax : 0) : resolvedCatalogTax([article, item, bundle], tax),
       discountType: "percent",
       discountValue: 0,
       bundleId: bundle.id,
       bundleName: bundle.name,
+      forfait,
+      forfaitHt: carrier ? forfaitHt : null,
     };
   });
 }
@@ -1516,6 +1565,32 @@ export function buildQuoteLineFromArticle(article, overrides = {}, defaults = {}
 
 export function priceTtc(ht, tax) {
   return Number(ht || 0) * (1 + Number(tax || 0) / 100);
+}
+
+export function parseFrenchDecimal(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const cleaned = String(value ?? "").trim().replace(/[\s\u202f\u00a0]/g, "").replace(",", ".");
+  if (!cleaned || cleaned === ".") return null;
+  const amount = Number(cleaned);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+export function frenchDecimalText(value) {
+  const amount = parseFrenchDecimal(value);
+  if (amount == null) return "";
+  return new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 }).format(amount);
+}
+
+export function formatTaxRate(value) {
+  const rate = Number(value);
+  if (!Number.isFinite(rate)) return "";
+  return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 }).format(rate)} %`;
+}
+
+export function forfaitPriceLabel(amount, tax) {
+  const euro = value => new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(Number(value || 0));
+  const ht = Number(amount || 0);
+  return `${euro(ht)} HT · ${formatTaxRate(tax)} · ${euro(priceTtc(ht, tax))} TTC`;
 }
 
 export function roundPrice(value) {

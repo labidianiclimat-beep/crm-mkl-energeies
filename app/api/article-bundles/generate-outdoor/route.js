@@ -10,7 +10,9 @@ import {
   isMissingBundleTable,
   orgArticlesSelectPath,
   outdoorBundleDrafts,
+  readBundleRows,
   validateBundlePayload,
+  writeBundleRows,
 } from "../../../lib/article-bundles";
 import { radiatorBundleDrafts } from "../../../lib/radiator-bundle";
 import { serviceRequest, serviceRoleConfigured } from "../../../lib/supabase-server";
@@ -43,7 +45,7 @@ export async function POST(request) {
     const orgId = auth.profile.organization_id;
     const [articleRows, bundleRows] = await Promise.all([
       serviceRequest(orgArticlesSelectPath(orgId)),
-      serviceRequest(`/rest/v1/article_bundles?select=${BUNDLE_SELECT}&organization_id=eq.${encodeURIComponent(orgId)}`),
+      readBundleRows(serviceRequest, `/rest/v1/article_bundles?select=${BUNDLE_SELECT}&organization_id=eq.${encodeURIComponent(orgId)}`),
     ]);
     const articles = (articleRows || []).map(articleToUi);
     const existing = (bundleRows || []).map(bundleToUi);
@@ -71,7 +73,7 @@ export async function POST(request) {
 
     let created = [];
     if (records.length) {
-      const rows = await serviceRequest("/rest/v1/article_bundles", {
+      const rows = await writeBundleRows(serviceRequest, "/rest/v1/article_bundles", {
         method: "POST",
         headers: { Prefer: "return=representation" },
         body: records,

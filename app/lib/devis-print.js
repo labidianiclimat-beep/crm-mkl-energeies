@@ -8,7 +8,7 @@ import {
   documentPartiesHtml,
 } from "./company.js";
 import { formatClientNumber } from "./client-number.js";
-import { computeDocumentTotals, ELECTRICITY_OPERATORS, firstMonthlyDelayLabel, quoteBillingAddress, quoteWorksiteAddress } from "./devis.js";
+import { computeDocumentTotals, ELECTRICITY_OPERATORS, firstMonthlyDelayLabel, photovoltaicGroupTitle, quoteBillingAddress, quoteWorksiteAddress } from "./devis.js";
 import { buildDevisPdfBlob, loadRgeLogo } from "./devis-pdf.js";
 import { DOCUMENT_PREVIEW_BAR_CSS, documentPreviewBarHtml } from "./document-preview.js";
 import { reservePdfTab, triggerBlobDownload } from "./html-to-pdf.js";
@@ -65,13 +65,14 @@ ${DOCUMENT_PARTIES_CSS}
 .doc-info p{margin:5px 0}
 .projet-mark{position:absolute;top:14mm;right:17mm;border:2px solid #405fae;color:#405fae;font:bold 11px Arial;padding:3px 7px;transform:rotate(-7deg);z-index:2}
 .sheet-flow,.sheet-page{position:relative}
-.lines-head,.article-main{display:grid;grid-template-columns:minmax(88mm,1fr) 10mm 18mm 18mm 13mm 20mm 22mm;gap:2mm;align-items:start}
+.lines-head,.article-main{display:grid;grid-template-columns:minmax(0,1fr) 9mm 22mm 22mm 14mm 22mm 24mm;gap:1.5mm;align-items:start}
 .lines-head{background:#405fae;color:#fff;padding:2.2mm 1.5mm;font-size:9px;font-weight:700;margin:4mm 0 0}
 .worksite-address{margin:0 0 3mm;padding:2.5mm 3mm;border:1px solid #b7c9ee;border-radius:2mm;background:#fff}
 .worksite-address b{display:block;color:#405fae;font-size:9px;letter-spacing:.04em;text-transform:uppercase}
 .worksite-address span{display:block;margin-top:1mm;color:#1f2d4f;font-size:11px}
 .lines-head span:not(:first-child),.article-main .num{text-align:right}
 .article-block{border-bottom:1px solid #e4e7ee;break-inside:auto}
+.pv-group-title{margin:3.5mm 0 0;padding:2.2mm 3mm;background:#152347;color:#ffcc00;font:700 12px Arial,sans-serif}
 .article-main{padding:2.5mm 1.5mm}
 .article-main .name{font-size:11px;font-weight:700;color:#1f2d4f;line-height:1.25}
 .article-main small{display:block;color:#7d8799;margin-top:1mm;font-size:10px}
@@ -120,11 +121,38 @@ export function articleDescriptionText(item) {
   return note;
 }
 
-export function buildDevisArticleHtml(item) {
+function forfaitPriceCells(item) {
+  if (!item?.forfait) return null;
+  if (!item.forfaitCarrier) return ["", "", "", "", ""];
+  const ht = euro(item.totalHT);
+  const ttc = euro(item.totalTTC);
+  return [ht, ttc, taxLabel(item.tax), ht, ttc];
+}
+
+export function buildDevisArticleHtml(item, { groupTitle = "" } = {}) {
   const note = articleDescriptionText(item);
   const code = String(item.code || item.reference || "").trim();
-  const unitTtc = Number(item.unit) * (1 + Number(item.tax || 0) / 100);
+  const packed = forfaitPriceCells(item);
+  let unitHt;
+  let unitTtcCell;
+  let taxCell;
+  let totalHt;
+  let totalTtc;
+  if (packed) {
+    [unitHt, unitTtcCell, taxCell, totalHt, totalTtc] = packed;
+    if (totalHt) totalHt = `<b>${totalHt}</b>`;
+    if (totalTtc) totalTtc = `<b>${totalTtc}</b>`;
+  } else {
+    const unitTtc = Number(item.unit) * (1 + Number(item.tax || 0) / 100);
+    unitHt = euro(Number(item.unit));
+    unitTtcCell = euro(unitTtc);
+    taxCell = taxLabel(item.tax);
+    totalHt = `<b>${euro(item.totalHT)}</b>`;
+    totalTtc = `<b>${euro(item.totalTTC)}</b>`;
+  }
+  const title = String(groupTitle || "").trim();
   return `<article class="article-block" data-flow-block>
+    ${title ? `<div class="pv-group-title">${safe(title)}</div>` : ""}
     <div class="article-main">
       <div class="article-detail">
         <b class="name" data-article-name>${safe(item.name)}</b>
@@ -132,11 +160,11 @@ export function buildDevisArticleHtml(item) {
         ${note ? `<div class="article-desc" data-split-text>${safe(note)}</div>` : ""}
       </div>
       <div class="num">${safe(item.qty)}</div>
-      <div class="num">${euro(Number(item.unit))}</div>
-      <div class="num">${euro(unitTtc)}</div>
-      <div class="num">${taxLabel(item.tax)}</div>
-      <div class="num"><b>${euro(item.totalHT)}</b></div>
-      <div class="num"><b>${euro(item.totalTTC)}</b></div>
+      <div class="num">${unitHt}</div>
+      <div class="num">${unitTtcCell}</div>
+      <div class="num">${taxCell}</div>
+      <div class="num">${totalHt}</div>
+      <div class="num">${totalTtc}</div>
     </div>
   </article>`;
 }
@@ -182,7 +210,9 @@ export async function buildDevisPrintHtml(doc, { clients = [], articles = [], co
   const companyName = safe(companyDisplayName(company));
   const resolvedLogo = logoData || await loadPrintLogo();
   const printableLines = totals.lines.filter((_, index) => !(doc.hiddenLines || []).includes(index));
-  const articleBlocks = printableLines.map(buildDevisArticleHtml).join("");
+  const articleBlocks = printableLines.map((item, index) => buildDevisArticleHtml(item, {
+    groupTitle: photovoltaicGroupTitle(printableLines, index),
+  })).join("");
   const noteParts = [doc.specialConditions, doc.freeNote]
     .map(part => String(part || "").trim())
     .filter(part => part && !/CGV MKL/i.test(part));

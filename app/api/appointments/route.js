@@ -17,6 +17,7 @@ import {
 import { commercialScopeQuery, loadPrivateAgendaOwnerIds, loadTeamMemberIds } from "../../lib/team-scope";
 import { isProspectDispatcher } from "../../lib/prospect-dispatch";
 import { resolveScopedCommercialIds, visibleAgendaAppointment, visibleAgendaRowForViewer } from "../../lib/scoping";
+import { canSignCommercialOrder, normalizeAgendaStatus, ORDER_SIGN_DENIED } from "../../lib/appointment-status";
 import { notifyProspectOfAppointment } from "../../lib/prospect-appointment-mail";
 import { agendaStackAllowed, claimProspectForAppointment } from "../../lib/prospect-assign";
 import {
@@ -148,6 +149,9 @@ export async function POST(request) {
     const errors = validateAppointmentPayload(record);
     if (errors.length) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
+    }
+    if (normalizeAgendaStatus(record.status) === "Commande signée" && !canSignCommercialOrder(auth.profile)) {
+      return Response.json({ error: ORDER_SIGN_DENIED }, { status: 403 });
     }
 
     try {

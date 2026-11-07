@@ -1,7 +1,7 @@
 import { requireApiSession } from "../../../lib/api-auth";
 import { ACTIVITY_ACTIONS } from "../../../lib/activity-logs";
 import { actorFromAuth, logActivity } from "../../../lib/log-activity";
-import { canApplyRdvStatus, isAppointmentOutcomeOnlyPatch, rdvStatuerHint } from "../../../lib/appointment-status";
+import { canApplyRdvStatus, canSignCommercialOrder, isAppointmentOutcomeOnlyPatch, normalizeAgendaStatus, ORDER_SIGN_DENIED, rdvStatusDeniedMessage } from "../../../lib/appointment-status";
 import { canEditExistingAppointment, canPerformAction } from "../../../lib/permissions";
 import { isProspectDispatcher } from "../../../lib/prospect-dispatch";
 import {
@@ -166,7 +166,7 @@ export async function PATCH(request, { params }) {
     }
     if (outcomeOnly && !canApplyRdvStatus(auth.profile, auth.user.id, current, body.status)) {
       return Response.json({
-        error: rdvStatuerHint(auth.profile, auth.user.id, current) || "Ce statut ne peut pas encore être posé.",
+        error: rdvStatusDeniedMessage(auth.profile, auth.user.id, current, body.status),
       }, { status: 403 });
     }
     const limited = isAgendaAssignOrCommentPatch(body);
@@ -223,6 +223,13 @@ export async function PATCH(request, { params }) {
     const errors = validateAppointmentPayload(record);
     if (errors.length) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
+    }
+    if (
+      normalizeAgendaStatus(record.status) === "Commande signée"
+      && normalizeAgendaStatus(existing.status) !== "Commande signée"
+      && !canSignCommercialOrder(auth.profile)
+    ) {
+      return Response.json({ error: ORDER_SIGN_DENIED }, { status: 403 });
     }
 
     try {

@@ -54,6 +54,8 @@ export const PLANNING_RDV_STATUSES = [
 
 const STATUER_OWN_ROLES = ["Commercial"];
 const STATUER_ALL_ROLES = ["Responsable commercial", "Responsable prospection", "Admin VIP", "Superadmin", "Direction"];
+const ORDER_SIGN_ROLES = ["Admin VIP", "Superadmin"];
+export const ORDER_SIGN_DENIED = "Seuls le Superadmin et l’Admin VIP peuvent poser le statut Commande signée.";
 
 const LEGACY_STATUS = {
   "À dispatcher": "Non statué",
@@ -122,19 +124,38 @@ export function canStatuerAppointment(profile, userId, item) {
   return false;
 }
 
+export function canSignCommercialOrder(profile) {
+  return ORDER_SIGN_ROLES.includes(normalizeRoleLabel(profile?.role));
+}
+
+function withoutUnsignedOrder(profile, item, statuses) {
+  if (canSignCommercialOrder(profile)) return statuses;
+  const current = normalizeAgendaStatus(item?.status);
+  return statuses.filter(status => status !== "Commande signée" || current === "Commande signée");
+}
+
 export function allowedRdvStatusesFor(profile, userId, item, now = Date.now()) {
   if (!canStatuerAppointment(profile, userId, item)) return [];
   const current = normalizeAgendaStatus(item?.status);
   const role = normalizeRoleLabel(profile?.role);
-  if (STATUER_ALL_ROLES.includes(role) || appointmentHasStarted(item, now)) return rdvStatusOptions(current);
-  return PLANNING_RDV_STATUSES.includes(current)
-    ? PLANNING_RDV_STATUSES
-    : [current, ...PLANNING_RDV_STATUSES];
+  const statuses = STATUER_ALL_ROLES.includes(role) || appointmentHasStarted(item, now)
+    ? rdvStatusOptions(current)
+    : (PLANNING_RDV_STATUSES.includes(current) ? PLANNING_RDV_STATUSES : [current, ...PLANNING_RDV_STATUSES]);
+  return withoutUnsignedOrder(profile, item, statuses);
 }
 
 export function canApplyRdvStatus(profile, userId, item, nextStatus, now = Date.now()) {
   const next = normalizeAgendaStatus(nextStatus);
   return allowedRdvStatusesFor(profile, userId, item, now).includes(next);
+}
+
+export function rdvStatusDeniedMessage(profile, userId, item, nextStatus, now = Date.now()) {
+  const next = normalizeAgendaStatus(nextStatus);
+  if (next === "Commande signée" && normalizeAgendaStatus(item?.status) !== "Commande signée" && !canSignCommercialOrder(profile)) {
+    return ORDER_SIGN_DENIED;
+  }
+  if (canApplyRdvStatus(profile, userId, item, nextStatus, now)) return "";
+  return rdvStatuerHint(profile, userId, item, now) || "Ce statut ne peut pas encore être posé.";
 }
 
 export function rdvStatuerHint(profile, userId, item, now = Date.now()) {

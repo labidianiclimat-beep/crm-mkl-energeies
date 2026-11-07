@@ -28,6 +28,7 @@ import {
   callCard,
   confirmedSite,
   buildServiceVisitRecord,
+  serviceTaskText,
   indicatedEntretienRecord,
   isMaintenanceVisit,
   parisRange,
@@ -414,6 +415,7 @@ export async function POST(request) {
           actorId: auth.user.id,
         }),
         ...parisRange(day, time, 75),
+        description: serviceTaskText(body.description),
       };
       const visit = await insertCrmVisit(orgId, record);
       forgetOrgPayload("entretien-pilotage", orgId);
@@ -520,6 +522,7 @@ export async function POST(request) {
       const updated = await patchEntretienVisit(orgId, visit.id, {
         ...range,
         ...(site.ok ? { location: site.location } : {}),
+        ...(body.description !== undefined ? { description: serviceTaskText(body.description) } : {}),
       });
       forgetOrgPayload("entretien-pilotage", orgId);
       await logActivity({
