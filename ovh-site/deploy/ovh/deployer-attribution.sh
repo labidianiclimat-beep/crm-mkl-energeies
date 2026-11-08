@@ -346,8 +346,14 @@ deployer() {
   printf '  Une copie de %s sera faite dans %s.\n' "$DISTANT" "$SAUVEGARDE"
   printf '  Le retour arrière se fera par :\n'
   printf '    sh %s --retour\n\n' "$(basename "$0")"
-  printf '  Ce passage met le code en place, interrupteur coupé : le site ne\n'
-  printf '  transmettra encore rien au CRM. L ouverture est une étape séparée.\n\n'
+  # Ce script ne touche pas à l'interrupteur, ni pour l'ouvrir ni pour le
+  # fermer : il ne déploie que du code, et le redémarrage relit le fichier de
+  # variables tel qu'il est. Il affirmait « interrupteur coupé » — vrai jusqu au
+  # 7 novembre 2026, faux dès l'ouverture, et ce genre de phrase est pire
+  # qu'absente : on déploierait en croyant le robinet fermé.
+  printf '  Ce passage ne met en place que du code. Il ne touche pas à\n'
+  printf '  l interrupteur : le redémarrage le laisse tel qu il est, ouvert ou\n'
+  printf '  fermé. Son état se lit par ouvrir-liaison-crm.sh --controles.\n\n'
   printf '  Tapez « deployer le site » pour continuer : '
   read -r REPONSE
   [ "$REPONSE" = "deployer le site" ] || { printf '\n  Abandon. Rien n a été déployé.\n\n'; exit 1; }
@@ -414,7 +420,8 @@ eprouver() {
   done
   echo
   if [ "$ANOMALIE" = "0" ]; then
-    printf '  Site conforme. Interrupteur toujours coupé : rien ne part vers le CRM.\n\n'
+    printf '  Site conforme. L interrupteur n a pas été touché : il est resté\n'
+    printf '  tel qu il était avant ce passage.\n\n'
   else
     printf '  ANOMALIE. Retour arrière :\n    sh %s --retour\n\n' "$(basename "$0")"
     return 1
