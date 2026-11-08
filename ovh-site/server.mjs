@@ -2023,8 +2023,21 @@ async function serveStatic(req, res) {
   await servePublicFile(req, res, ROOT);
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+async function handleRequest(req, res) {
+  // `new URL` lève sur une cible de requête malformée, et `//` suffit : c'est
+  // une URL relative au protocole, donc une URL sans hôte. Le 7 novembre 2026
+  // à 23 h 55, une seule requête `GET //` a fait tomber le processus entier ;
+  // systemd l'a relancé en six secondes, mais le site a répondu 502 pendant
+  // tout ce temps, et rien n'empêchait de recommencer. Un chemin que l'on ne
+  // sait pas lire se refuse, il n'arrête pas le serveur.
+  let url;
+  try {
+    url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  } catch {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Requête malformée");
+    return;
+  }
   const { pathname } = url;
 
   if (req.method === "OPTIONS" && pathname.startsWith("/api/")) {
@@ -2235,6 +2248,26 @@ const server = http.createServer(async (req, res) => {
   }
 
   res.writeHead(405).end("Method not allowed");
+}
+
+// Le filet, et la raison pour laquelle il existe. Jusqu'au 7 novembre 2026, le
+// gestionnaire n'était entouré de rien : une exception sur n'importe quelle
+// route tuait le processus, et avec lui le site et l'administration. Le
+// correctif du chemin `//` ferme un trou ; celui-ci ferme la catégorie. Un
+// défaut sur une route doit coûter une réponse 500, pas le site entier.
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    // Ni corps de requête, ni en-têtes, ni cookies dans le journal : une trace
+    // d'erreur ne doit pas devenir un entrepôt de données personnelles ou de
+    // secrets. La méthode et le chemin suffisent à retrouver la route.
+    console.error(`[erreur] ${req.method} ${req.url} —`, err && err.message);
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Erreur interne");
+    } else {
+      res.end();
+    }
+  });
 });
 
 server.listen(PORT, "0.0.0.0", () => {

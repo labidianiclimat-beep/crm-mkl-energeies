@@ -127,12 +127,17 @@ controles() {
   if [ "$CODE" = "404" ]; then ok "les demandes restent privées" "code $CODE"
   else nok "les demandes restent privées" "code $CODE"; fi
 
-  # L'interrupteur doit être coupé au moment du déploiement : on met le code
-  # en place d'abord, on ouvre le robinet ensuite, séparément.
+  # Ce contrôle porte sur l'environnement LOCAL, et son intitulé doit le dire.
+  # Tant qu'il annonçait « interrupteur coupé » tout court, il laissait croire
+  # qu'il avait regardé le serveur — ce qu'il ne fait pas, et ne peut pas faire
+  # ici : `--controles` est documenté comme n'ouvrant aucune connexion SSH. Il a
+  # donc affirmé « coupé » le 7 novembre 2026 alors que la liaison venait
+  # d'être ouverte en production. L'état réel du serveur se lit par
+  # `ouvrir-liaison-crm.sh --controles`, qui, lui, va le chercher.
   if [ "${CRM_SYNC_ENABLED:-}" = "1" ]; then
-    nok "interrupteur coupé pour ce passage" "CRM_SYNC_ENABLED=1 dans cet environnement"
+    nok "aucun envoi depuis ce poste" "CRM_SYNC_ENABLED=1 dans cet environnement local"
   else
-    ok "interrupteur coupé pour ce passage"
+    ok "aucun envoi depuis ce poste" "variable locale absente"
   fi
 
   # Le contrôle le plus important, et celui qui a servi. Le dépôt n'est pas
