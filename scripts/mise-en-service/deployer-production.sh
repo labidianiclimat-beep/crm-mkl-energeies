@@ -195,9 +195,15 @@ case "$ACTION" in
   CIBLE_AVANT=$(production_en_place)
   printf '  Retour arrière, si besoin, vers le déploiement actuellement en place :\n'
   printf '    sh scripts/mise-en-service/deployer-production.sh --retour %s\n\n' "$CIBLE_AVANT"
-  printf '  Ce déploiement met en ligne la nouvelle clé Google Solar, les corrections\n'
-  printf '  du catalogue et des devis, la fermeture des droits, et fait taire la tâche\n'
-  printf '  de la minute. Il ne touche ni au schéma Supabase, ni à main, ni au site OVH.\n\n'
+  # Ce texte est la dernière chose lue avant d'engager la production : il doit
+  # décrire CE déploiement, et pas le précédent. Tant qu'il annonçait la clé
+  # Google Solar et les corrections du catalogue, il invitait à confirmer un
+  # passage qui n'était plus celui-là.
+  printf '  Ce déploiement met en ligne la colonne et le filtre « Origine » dans les\n'
+  printf '  deux listes de prospects, et le bloc « Provenance » en lecture seule dans\n'
+  printf '  la fiche. Il ne fait que LIRE : aucune fiche n est modifiée, aucune origine\n'
+  printf '  déjà enregistrée n est réécrite, et l historique est traduit à l affichage.\n'
+  printf '  Il ne touche ni au schéma Supabase, ni à main, ni au site OVH.\n\n'
   printf '  Tapez « deployer en production » pour continuer : '
   read -r REPONSE
   [ "$REPONSE" = "deployer en production" ] || { printf '\n  Abandon. Rien n a été déployé.\n\n'; exit 1; }

@@ -163,6 +163,13 @@ export function prospectToUi(row, names = {}) {
     value: Number(row.estimated_value || extra.value || 0),
     power: extra.power || "À définir",
     source: row.source || extra.source || "",
+    // L'origine structurée voyage à côté de la source libre, sans la remplacer.
+    // Les deux champs ne disent pas la même chose : `source` est saisi par les
+    // équipes, la catégorie découle du canal de création et ne se saisit pas.
+    originChannel: row.origin_channel || "",
+    originCategory: row.origin_category || "",
+    originSubtype: row.origin_subtype || "",
+    originSetAt: row.origin_set_at || "",
     stage: row.stage || "Nouveau",
     rdvStatus: row.rdvStatus || extra.rdvStatus || "",
     commercialId,
@@ -443,8 +450,12 @@ export function isMissingCommercialTable(error) {
 export const MISSING_TABLE_MESSAGE =
   "Tables commerciales absentes. Appliquez la migration 20260323_rls_commercial_scoping.sql dans Supabase.";
 
+// Les quatre colonnes d'origine sont demandées explicitement. Elles étaient
+// écrites depuis l'ouverture de la liaison avec le site, mais absentes de cette
+// liste : l'information s'arrêtait donc en base, et l'interface ne pouvait rien
+// en montrer, quoi qu'on y ajoute.
 export const PROSPECT_SELECT =
-  "id,organization_id,name,phone,email,city,project_type,estimated_value,source,stage,commercial_id,notes,extra,created_at,updated_at,created_by";
+  "id,organization_id,name,phone,email,city,project_type,estimated_value,source,stage,commercial_id,notes,extra,created_at,updated_at,created_by,origin_channel,origin_category,origin_subtype,origin_set_at";
 
 export const APPOINTMENT_SELECT =
   "id,organization_id,opportunity_id,prospect_name,city,project_type,starts_at,duration_minutes,commercial_id,manager_id,status,notes,extra,created_at,updated_at,created_by";

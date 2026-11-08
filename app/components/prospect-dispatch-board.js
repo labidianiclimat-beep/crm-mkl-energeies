@@ -18,6 +18,8 @@ import {
 import { normalizeRoleLabel } from "../lib/roles";
 import { isConvertedProspect } from "../lib/prospect-to-client";
 import { formatProspectNumber } from "../lib/prospect-number";
+import { matchesOriginFilter, originFilterOptions } from "../lib/prospect-origin-view";
+import ProspectOriginCell from "./prospect-origin-cell";
 import { ClientPhoneLink } from "./address-call-notice";
 import CopyNumber from "./copy-number";
 import { parisDateTimeParts } from "../lib/agenda";
@@ -81,6 +83,7 @@ export default function ProspectDispatchBoard({
   const [commercialFilter, setCommercialFilter] = useState("");
   const [prospectorFilter, setProspectorFilter] = useState("");
   const [dateFilter, setDateFilter] = useState("");
+  const [originFilter, setOriginFilter] = useState("");
   const [textQuery, setTextQuery] = useState("");
   const appointmentByProspect = useMemo(
     () => Object.fromEntries((appointments || []).filter(item => item.prospectId && item.kind !== "busy").map(item => [item.prospectId, item])),
@@ -90,11 +93,12 @@ export default function ProspectDispatchBoard({
   const searched = (prospects || []).filter(item => matchesPersonListQuery(item, query) && matchesPersonListQuery(item, textQuery));
   const commercialChoices = peopleOptions(searched, "commercialId", "owner");
   const prospectorChoices = peopleOptions(searched, "prospectorId", "prospector");
+  const originChoices = originFilterOptions(searched);
   const filtered = searched.filter(item => matchesDirectoryFilters(
     item,
     { commercialId: commercialFilter, prospectorId: prospectorFilter, date: dateFilter },
     prospectMoment(item, appointmentByProspect[item.id])
-  ));
+  ) && matchesOriginFilter(item, originFilter));
   const queue = filtered.filter(isUnassignedProspect);
   const assigned = filtered.filter(item => isAssignedProspect(item) && !isConvertedProspect(item));
   const converted = filtered.filter(isConvertedProspect);
@@ -184,6 +188,12 @@ export default function ProspectDispatchBoard({
             {prospectorChoices.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
+        <label>Origine
+          <select value={originFilter} onChange={event => setOriginFilter(event.target.value)}>
+            <option value="">Toutes</option>
+            {originChoices.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
+          </select>
+        </label>
         <label>Date
           <input type="date" value={dateFilter} onChange={event => setDateFilter(event.target.value)} />
         </label>
@@ -194,6 +204,7 @@ export default function ProspectDispatchBoard({
           <span>PROSPECT</span>
           <span>CONTACT / ADRESSE</span>
           <span>PROJET</span>
+          <span>ORIGINE</span>
           <span>DATE SOUHAITÉE</span>
           <span>PROSPECTEUR</span>
           <span>COMMERCIAL</span>
@@ -212,7 +223,12 @@ export default function ProspectDispatchBoard({
                 : <b>Téléphone à compléter</b>}
               <small>{[prospect.address, prospect.postalCode, prospect.city].filter(Boolean).join(" ") || prospect.city}</small>
             </span>
-            <span><b>{prospect.type}</b><small>{[prospect.source, outcome].filter(Boolean).join(" · ")}</small></span>
+            {/* `prospect.source` quitte cette cellule : il est désormais porté
+                par la colonne « Origine », traduit en catégorie. L'y laisser
+                aurait affiché deux fois la même information, l'une brute et
+                l'autre interprétée. */}
+            <span><b>{prospect.type}</b><small>{outcome}</small></span>
+            <ProspectOriginCell prospect={prospect} />
             <span>{formatWhen(desiredStartOf(prospect) || planned?.start)}</span>
             <span>{prospect.prospector || prospect.creator || "Non renseigné"}</span>
             <span>{prospect.owner || "Non affecté"}</span>

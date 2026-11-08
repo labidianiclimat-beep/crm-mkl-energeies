@@ -62,6 +62,10 @@ function touchKey(row) {
     campaignName: text(row?.campaign_name || row?.campaignName),
     evidence: text(row?.evidence),
     touchedAt: text(row?.touched_at || row?.touchedAt),
+    // Le chemin de la page d'arrivée, et lui seul. Ni l'identifiant de clic ni
+    // la chaîne de requête ne remontent : ils n'apprennent rien au commercial
+    // et transporteraient un marqueur publicitaire jusqu'au navigateur.
+    landingPath: text(row?.landing_path || row?.landingPath),
   };
 }
 

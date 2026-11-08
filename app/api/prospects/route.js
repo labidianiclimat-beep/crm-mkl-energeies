@@ -33,6 +33,7 @@ import { listAllRows } from "../../lib/supabase-list";
 import { serviceRequest, serviceRoleConfigured } from "../../lib/supabase-server";
 import { notifyProspectOfAppointment } from "../../lib/prospect-appointment-mail";
 import { attachProspectRdvStatuses } from "../../lib/prospect-rdv-status-server";
+import { attachProspectOrigins } from "../../lib/prospect-origin-server";
 import { withAppointmentNames, withProspectNames } from "../../lib/profile-names";
 
 export const runtime = "nodejs";
@@ -75,7 +76,10 @@ export async function GET(request) {
     const rows = await listProspectRows(path);
     const named = await withProspectNames(rows || []);
     const visible = visibleProspects(named, { includeConverted: includeConverted || forDispatch || fieldCapture });
-    const prospects = await attachProspectRdvStatuses(orgId, visible);
+    const withStatuses = await attachProspectRdvStatuses(orgId, visible);
+    // Après le cloisonnement, jamais avant : les contacts ne sont demandés que
+    // pour les fiches que cet utilisateur a le droit de voir.
+    const prospects = await attachProspectOrigins(orgId, withStatuses);
     return Response.json({ prospects });
   } catch (error) {
     if (isMissingCommercialTable(error)) {

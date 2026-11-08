@@ -9,6 +9,7 @@ import RecordDocumentList from "./record-document-list";
 import { documentsForRecord } from "../lib/record-documents";
 import { commercialsForProspectAssign } from "../lib/prospect-dispatch";
 import ProspectorPicker from "./prospector-picker";
+import ProspectOriginTrace from "./prospect-origin-trace";
 import { displayRdvStatus } from "../lib/appointment-status";
 import { CIVILITIES, PHONE_PATTERN, PHONE_PLACEHOLDER, PHONE_TITLE } from "../lib/clients";
 import {
@@ -196,6 +197,9 @@ export default function ProspectFields({
         <ChipGroup name="type" value={projectTypes} onChange={setProjectTypes} options={PROJECT_TYPES} multiple disabled={readOnly} />
         <span className="prospect-chip-label">Origine du contact</span>
         <ChipGroup name="source" value={source} onChange={setSource} options={sourceOptions} disabled={readOnly} />
+        {/* Juste après le champ saisissable, et non ailleurs : le rapprochement
+            des deux est tout l'intérêt. Ce bloc ne se saisit pas, il constate. */}
+        {prospect && <ProspectOriginTrace prospect={prospect} />}
         <ProspectorPicker
           team={team}
           currentUserId={currentUserId}
