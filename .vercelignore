@@ -1,0 +1,45 @@
+# Fichiers exclus de l'archive envoyée à Vercel.
+#
+# Attention au piège : dès que ce fichier existe, Vercel l'emploie À LA PLACE
+# de .gitignore. Tout ce qui n'y figure pas est téléversé, même si Git
+# l'ignore. Les exclusions ci-dessous ne sont donc pas des doublons de
+# .gitignore : sans elles, ces chemins partiraient réellement.
+
+# Le site public, déployé sur le VPS OVH et non sur Vercel.
+ovh-site
+
+# Fichiers d'environnement locaux. Celui-ci contient la configuration de
+# PRODUCTION et des secrets applicatifs : il n'a rien à faire dans l'archive
+# d'un déploiement, à plus forte raison d'un déploiement de prévisualisation
+# qui doit viser la recette. Les variables utiles sont posées par la
+# plateforme, environnement par environnement.
+.env.local
+.env.*.local
+
+# Outillage d'exploitation. Ces scripts citent nécessairement l'identifiant du
+# projet de production, puisque leur rôle est de le reconnaître pour le
+# refuser, et décrivent les procédures de bascule. La compilation n'en a aucun
+# besoin : « build:vercel » n'appelle que les deux vérificateurs restés à la
+# racine de scripts/, et ceux-ci n'importent que des modules de Node.
+scripts/recette
+scripts/env-split
+scripts/mise-en-service
+scripts/pg-test
+docs
+supabase/.temp
+
+# Compilation locale. Ce point mérite une explication, parce qu'il est
+# contre-intuitif : .next est dans .gitignore, mais .gitignore ne s'applique
+# plus dès que ce fichier existe. Sans la ligne ci-dessous, une compilation
+# locale partait donc réellement dans l'archive — et une compilation locale est
+# faite avec .env.local, c'est à dire avec l'adresse Supabase de PRODUCTION
+# gravée dans le code. Une archive de prévisualisation n'a pas à la transporter.
+.next
+
+# Dépendances, reconstruites par la plateforme à partir du verrou.
+node_modules
+
+# Dossiers de travail locaux.
+.cursor
+dist
+tmp

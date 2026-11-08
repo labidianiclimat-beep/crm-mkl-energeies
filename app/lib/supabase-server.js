@@ -1,10 +1,45 @@
+import { currentEnvironmentVerdict, environmentRejectionMessage } from "./supabase-environment.js";
+
 function cleanEnv(value) {
   return String(value || "").trim().replace(/\s+/g, "");
 }
 
-const projectUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "https://rzkwmwtjnwnmmcexwoov.supabase.co").trim();
-const publishableKey = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) || "sb_publishable_egPsJQ5koBZHRPhT4dPhFw_Ffiz67B3";
+const projectUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
+const publishableKey = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+/**
+ * Cloisonnement des environnements, évalué une seule fois au chargement.
+ *
+ * Le verdict passe par le même chemin que la configuration absente : les
+ * routes renvoient donc 503 sans qu'aucune n'ait à être modifiée. Un
+ * déploiement Preview qui aurait reçu les identifiants de production refuse
+ * ainsi de servir, au lieu d'écrire dans la base réelle.
+ *
+ * Le motif est écrit une fois dans les journaux, et il ne contient aucune clé.
+ */
+const environnement = currentEnvironmentVerdict();
+if (!environnement.ok) {
+  console.error(`Supabase refusé : ${environnement.reason} — ${environmentRejectionMessage(environnement)}`);
+} else if (environnement.warning) {
+  // Signalé sans bloquer : en production, couper l'accès sur ce seul motif
+  // ferait plus de dégâts que l'incohérence qu'il décrit.
+  console.warn(`Supabase, anomalie de configuration : ${environnement.warning} — ${environmentRejectionMessage(environnement)}`);
+}
+
+function configurationManquante() {
+  const error = new Error("Configuration Supabase incomplète.");
+  error.code = "SUPABASE_NOT_CONFIGURED";
+  error.status = 503;
+  return error;
+}
+
+function environnementRefuse() {
+  const error = new Error("Configuration Supabase incomplète.");
+  error.code = environnement.reason;
+  error.status = 503;
+  return error;
+}
 
 /**
  * Rejoue une requête GoTrue avec la clé service en entête `apikey`, le jeton
@@ -18,14 +53,22 @@ async function requestAsGateway(path, options = {}) {
 }
 
 export function supabaseConfigured() {
-  return Boolean(projectUrl && publishableKey);
+  return Boolean(environnement.ok && projectUrl && publishableKey);
 }
 
 export function serviceRoleConfigured() {
-  return Boolean(projectUrl && serviceRoleKey);
+  return Boolean(environnement.ok && projectUrl && serviceRoleKey);
+}
+
+/** Verdict de cloisonnement, pour les contrôles d'exploitation. */
+export function supabaseEnvironment() {
+  return { ...environnement };
 }
 
 async function request(path, { method = "GET", body, token, apiKey, headers = {} } = {}) {
+  if (!environnement.ok) throw environnementRefuse();
+  const cle = apiKey || publishableKey;
+  if (!projectUrl || !cle) throw configurationManquante();
   const response = await fetch(`${projectUrl}${path}`, {
     method,
     headers: {
@@ -47,6 +90,10 @@ async function request(path, { method = "GET", body, token, apiKey, headers = {}
     const message = payload?.msg || payload?.message || payload?.error_description || payload?.error || "Supabase request failed";
     const error = new Error(message);
     error.status = response.status;
+    // Code PostgreSQL relayé par PostgREST, par exemple 23505 pour un conflit
+    // d'unicité. Permet de distinguer « la ligne existe déjà » d'une vraie
+    // panne sans interpréter un message de texte.
+    if (payload?.code) error.code = String(payload.code);
     throw error;
   }
   return payload;
@@ -114,10 +161,10 @@ const BOOTSTRAP_ROLE_MODULES = {
   "Admin VIP": [
     "Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Factures",
     "Factures pro forma", "Demandes de chiffrage", "Fournisseurs", "Planning", "Chantiers",
-    "Équipes d'installation", "Maintenance", "Photovoltaïque administratif", "Visites techniques",
+    "Équipes d'installation", "Maintenance", "Photovoltaïque administratif", "Études thermiques", "Visites techniques",
     "Gestion des articles", "Utilisateurs",
   ],
-  Commercial: ["Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis"],
+  Commercial: ["Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Études thermiques", "Photovoltaïque administratif"],
 };
 
 async function hasAnyProfile() {
@@ -293,6 +340,26 @@ export async function createSessionForEmail(email) {
   throw new Error("SESSION_CREATE_FAILED");
 }
 
+export async function updateAuthUserAppMetadata(userId, appMetadata = {}) {
+  if (!isUuid(userId)) throw new Error("USER_UPDATE_INVALID");
+  return serviceRequest(`/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    body: { app_metadata: appMetadata },
+  });
+}
+
+export async function updateAuthUserEmail(userId, email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!isUuid(userId) || !normalized) throw new Error("EMAIL_UPDATE_INVALID");
+  return serviceRequest(`/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    body: {
+      email: normalized,
+      email_confirm: true,
+    },
+  });
+}
+
 export async function upsertProfile(record) {
   return serviceRequest("/rest/v1/profiles?on_conflict=id", {
     method: "POST",
@@ -375,4 +442,98 @@ export async function updateUserPassword(accessToken, password) {
 export function publicAppUrl(fallbackOrigin) {
   const configured = process.env.APP_PUBLIC_URL || fallbackOrigin || "";
   return configured.replace(/\/$/, "");
+}
+
+function storageObjectUrl(bucket, objectPath) {
+  const encodedPath = String(objectPath || "")
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+  return `${projectUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
+}
+
+function storageAuthHeaders(extra = {}) {
+  return {
+    apikey: serviceRoleKey,
+    Authorization: `Bearer ${serviceRoleKey}`,
+    ...extra,
+  };
+}
+
+export async function serviceUploadObject(bucket, objectPath, body, contentType) {
+  if (!serviceRoleConfigured()) throw new Error("SERVICE_ROLE_NOT_CONFIGURED");
+  const response = await fetch(storageObjectUrl(bucket, objectPath), {
+    method: "POST",
+    headers: storageAuthHeaders({
+      "Content-Type": contentType,
+      "x-upsert": "true",
+    }),
+    body,
+  });
+  if (response.ok) {
+    const text = await response.text();
+    try {
+      return text ? JSON.parse(text) : { ok: true };
+    } catch {
+      return { ok: true };
+    }
+  }
+  const payload = await response.text();
+  const error = new Error(payload || "STORAGE_UPLOAD_FAILED");
+  error.status = response.status;
+  throw error;
+}
+
+export async function serviceDownloadObject(bucket, objectPath) {
+  if (!serviceRoleConfigured()) throw new Error("SERVICE_ROLE_NOT_CONFIGURED");
+  const response = await fetch(storageObjectUrl(bucket, objectPath), {
+    method: "GET",
+    headers: storageAuthHeaders(),
+  });
+  if (!response.ok) {
+    const error = new Error("STORAGE_DOWNLOAD_FAILED");
+    error.status = response.status;
+    throw error;
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+
+export async function serviceDeleteObject(bucket, objectPath) {
+  if (!serviceRoleConfigured()) throw new Error("SERVICE_ROLE_NOT_CONFIGURED");
+  const response = await fetch(storageObjectUrl(bucket, objectPath), {
+    method: "DELETE",
+    headers: storageAuthHeaders(),
+  });
+  if (!response.ok && response.status !== 404) {
+    const error = new Error("STORAGE_DELETE_FAILED");
+    error.status = response.status;
+    throw error;
+  }
+}
+
+export async function serviceCreateSignedUrl(bucket, objectPath, expiresIn = 3600) {
+  if (!serviceRoleConfigured()) throw new Error("SERVICE_ROLE_NOT_CONFIGURED");
+  const encodedPath = String(objectPath || "")
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+  const response = await fetch(
+    `${projectUrl}/storage/v1/object/sign/${encodeURIComponent(bucket)}/${encodedPath}`,
+    {
+      method: "POST",
+      headers: storageAuthHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ expiresIn }),
+    }
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.signedURL) {
+    const error = new Error(payload.message || payload.error || "STORAGE_SIGN_FAILED");
+    error.status = response.status;
+    throw error;
+  }
+  const signed = String(payload.signedURL);
+  if (signed.startsWith("http")) return signed;
+  return `${projectUrl}/storage/v1${signed.startsWith("/") ? "" : "/"}${signed}`;
 }

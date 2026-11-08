@@ -1,5 +1,5 @@
 import { requireApiSession } from "../../../lib/api-auth";
-import { extractPvgisYearlyKwhPerKwp, estimateYieldFallback } from "../../../lib/pv-geo";
+import { extractPvgisMonthlyKwhPerKwp, extractPvgisYearlyKwhPerKwp, estimateYieldFallback } from "../../../lib/pv-geo";
 
 export const runtime = "nodejs";
 
@@ -28,12 +28,14 @@ export async function GET(request) {
       `&angle=${encodeURIComponent(angle)}&aspect=${encodeURIComponent(aspect)}&outputformat=json`;
 
     let yieldValue = null;
+    let monthly = null;
     let source = "fallback";
     try {
       const response = await fetch(pvgisUrl, { signal: AbortSignal.timeout(12000) });
       if (response.ok) {
         const payload = await response.json();
         yieldValue = extractPvgisYearlyKwhPerKwp(payload);
+        monthly = extractPvgisMonthlyKwhPerKwp(payload);
         if (yieldValue) source = "pvgis";
       }
     } catch {
@@ -47,6 +49,7 @@ export async function GET(request) {
 
     return Response.json({
       yieldValue,
+      monthly,
       source,
       lat,
       lon,

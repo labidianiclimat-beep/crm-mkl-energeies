@@ -1,16 +1,9 @@
 import { requireApiSession, canInviteUsers } from "../../../lib/api-auth";
+import { issueAndSendLoginPin, mailErrorMessage } from "../../../lib/user-login-pin";
 import {
-  generateActivationPin,
-  hashActivationPin,
-  LOGIN_PIN_TTL_MS,
-} from "../../../lib/activation-pin";
-import { sendMail } from "../../../lib/send-mail";
-import {
-  createActivationPinRecord,
   ensureAuthUser,
   getProfileByEmailService,
   getProfileByUserIdService,
-  invalidateActivePins,
   isUuid,
   publicAppUrl,
   serviceRoleConfigured,
@@ -23,44 +16,25 @@ const ROLE_DEFAULT_MODULES = {
   "Admin VIP": [
     "Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Factures",
     "Factures pro forma", "Demandes de chiffrage", "Fournisseurs", "Planning", "Chantiers",
-    "Équipes d'installation", "Maintenance", "Photovoltaïque administratif", "Visites techniques",
-    "Gestion des articles", "Utilisateurs",
+    "Équipes d'installation", "Maintenance", "Photovoltaïque administratif", "Études thermiques", "Visites techniques",
+    "Gestion des articles", "Grilles tarifaires PDF", "Utilisateurs",
   ],
-  "Admin second": [
+  Superadmin: [
     "Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Factures",
     "Demandes de chiffrage", "Fournisseurs", "Planning", "Chantiers", "Équipes d'installation",
-    "Maintenance", "Photovoltaïque administratif", "Gestion des articles", "Utilisateurs",
+    "Maintenance", "Photovoltaïque administratif", "Études thermiques", "Gestion des articles", "Grilles tarifaires PDF", "Utilisateurs",
   ],
   "Responsable technique": [
     "Tableau de bord", "Clients", "Demandes de chiffrage", "Fournisseurs", "Planning",
-    "Chantiers", "Équipes d'installation", "Maintenance", "Gestion des articles",
+    "Chantiers", "Équipes d'installation", "Visites techniques", "Maintenance",
+    "Photovoltaïque administratif", "Gestion des articles", "Grilles tarifaires PDF",
   ],
-  Technicien: ["Tableau de bord", "Planning", "Chantiers", "Maintenance"],
+  Technicien: ["Planning", "Chantiers", "Visites techniques", "Maintenance"],
   "Responsable commercial": [
-    "Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Planning", "Gestion des articles",
+    "Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Études thermiques", "Planning", "Gestion des articles", "Grilles tarifaires PDF",
   ],
-  Commercial: ["Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Planning"],
+  Commercial: ["Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Études thermiques", "Photovoltaïque administratif", "Planning", "Grilles tarifaires PDF"],
 };
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, character => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
-  }[character]));
-}
-
-function mailErrorMessage(error) {
-  const message = String(error?.message || "");
-  if (message === "MAIL_NOT_CONFIGURED") {
-    return "Le service d’envoi d’emails n’est pas configuré sur le serveur.";
-  }
-  if (message === "ACTIVATION_PIN_PEPPER_MISSING") {
-    return "ACTIVATION_PIN_PEPPER doit être définie sur le serveur pour générer un PIN.";
-  }
-  if (/MAIL_PROVIDER_ERROR|MAIL_SMTP_ERROR/i.test(message)) {
-    return "L’email n’a pas pu être envoyé. Vérifiez la configuration SMTP OVH sur Vercel.";
-  }
-  return message || "Le PIN n’a pas pu être renvoyé.";
-}
 
 export async function POST(request) {
   try {
@@ -129,34 +103,16 @@ export async function POST(request) {
       };
     }
 
-    const publicUrl = publicAppUrl(new URL(request.url).origin);
-    const resolvedUserId = profile.id;
-
-    await invalidateActivePins(resolvedUserId);
-    const pin = generateActivationPin();
-    const { pin_hash, pin_salt } = hashActivationPin(pin);
-    await createActivationPinRecord({
-      user_id: resolvedUserId,
-      pin_hash,
-      pin_salt,
-      expires_at: new Date(Date.now() + LOGIN_PIN_TTL_MS).toISOString(),
-      created_by: auth.profile.id,
+    const loginEmail = String(profile.email || normalizedEmail).trim().toLowerCase();
+    await issueAndSendLoginPin({
+      userId: profile.id,
+      email: loginEmail,
+      name: name || profile.full_name || "",
+      createdBy: auth.profile.id,
+      publicUrl: publicAppUrl(new URL(request.url).origin),
     });
 
-    await sendMail({
-      to: normalizedEmail,
-      subject: "Réinitialisation PIN — MKL Énergies CRM",
-      html: `<div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#26375f">
-        <h2>Bonjour ${escapeHtml(name || profile.full_name || "")},</h2>
-        <p>Votre administrateur a réinitialisé votre <b>code PIN personnel</b>.</p>
-        <p><b>Identifiant :</b> ${escapeHtml(normalizedEmail)}<br>
-        <b>Nouveau PIN personnel :</b> <span style="font-size:22px;letter-spacing:6px">${escapeHtml(pin)}</span></p>
-        <p style="margin:28px 0"><a href="${escapeHtml(`${publicUrl}/`)}" style="background:#405fae;color:white;text-decoration:none;padding:13px 20px;border-radius:8px">Se connecter au CRM</a></p>
-        <p style="font-size:12px;color:#7e8795">L’ancien PIN n’est plus valide. Conservez ce nouveau code en lieu sûr.</p>
-      </div>`,
-    });
-
-    return Response.json({ sent: true, userId: resolvedUserId, email: normalizedEmail, created: true });
+    return Response.json({ sent: true, userId: profile.id, email: loginEmail, created: true });
   } catch (error) {
     console.error("Resend PIN error", error.message);
     return Response.json({ error: mailErrorMessage(error) }, { status: 502 });

@@ -1,5 +1,28 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "npm run build:vercel"
+  "buildCommand": "npm run build:vercel",
+  "git": {
+    "deploymentEnabled": {
+      "etat-reference-20261105": false
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/web-leads",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/agenda-reminders",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/fleet-alerts",
+      "schedule": "15 7 * * *"
+    },
+    {
+      "path": "/api/cron/web-lead-retention",
+      "schedule": "45 3 * * *"
+    }
+  ]
 }

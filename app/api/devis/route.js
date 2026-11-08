@@ -1,17 +1,26 @@
 import { requireApiSession } from "../../lib/api-auth";
 import { ACTIVITY_ACTIONS } from "../../lib/activity-logs";
 import { canAccessModule } from "../../lib/permissions";
+import { normalizeRoleLabel } from "../../lib/roles";
 import {
   canManageDevis,
-  canViewAllDevis,
+  devisCommercialRequiredError,
   devisToUi,
   formToDevisRecord,
+  isDevisCommercialId,
+  isDevisOwnerRole,
+  canInvoiceQuote,
   kindToModule,
+  mustAssignDevisCommercial,
+  resolveDevisOwnerId,
   validateDevisPayload,
 } from "../../lib/devis";
 import { actorFromAuth, logActivity } from "../../lib/log-activity";
+import { resolveDevisRecipient } from "../../lib/convert-prospect";
+import { isProspectDispatcher } from "../../lib/prospect-dispatch";
 import { commercialScopeQuery, loadTeamMemberIds } from "../../lib/team-scope";
 import { canAccessScopedRow } from "../../lib/scoping";
+import { listAllRows, listAllRowsByIds } from "../../lib/supabase-list";
 import { serviceRequest, serviceRoleConfigured } from "../../lib/supabase-server";
 
 export const runtime = "nodejs";
@@ -20,12 +29,14 @@ const DEVIS_SELECT =
   "id,organization_id,kind,numero_devis,client_id,client_name,commercial_id,statut,date_creation,date_validite,date_livraison,total_ht,total_tva,total_ttc,remise_globale_type,remise_globale,acompte,reste_a_payer,conditions_reglement,observations,label,tax_default,financier,financed_amount,finance_months,monthly_payment,electricity_operator,pv_power_kwp,pv_study_id,extra,created_at,updated_at,created_by";
 
 const LINE_SELECT =
-  "id,devis_id,article_id,reference,designation,description,quantite,unite,prix_unitaire_ht,remise_type,remise,taux_tva,total_ht,total_tva,total_ttc,categorie,sous_categorie,bundle_id,bundle_name,ordre";
+  "id,devis_id,article_id,reference,designation,description,quantite,unite,prix_unitaire_ht,remise_type,remise,taux_tva,total_ht,total_tva,total_ttc,categorie,sous_categorie,bundle_id,bundle_name,forfait,forfait_montant_ht,ordre";
 
 async function loadLines(devisIds) {
   if (!devisIds.length) return {};
-  const rows = await serviceRequest(
-    `/rest/v1/devis_lignes?select=${LINE_SELECT}&devis_id=in.(${devisIds.map(id => `"${id}"`).join(",")})&order=ordre.asc`
+  const rows = await listAllRowsByIds(
+    `/rest/v1/devis_lignes?select=${LINE_SELECT}&order=ordre.asc`,
+    devisIds,
+    { column: "devis_id" }
   );
   const map = {};
   for (const row of rows || []) {
@@ -65,6 +76,16 @@ async function canAccessRow(profile, userId, row) {
   return canAccessScopedRow(profile, userId, row, teamIds || []);
 }
 
+async function loadAssignableDevisOwner(orgId, commercialId) {
+  if (!isDevisCommercialId(commercialId)) return null;
+  const rows = await serviceRequest(
+    `/rest/v1/profiles?select=id,role,active&id=eq.${encodeURIComponent(commercialId)}&organization_id=eq.${encodeURIComponent(orgId)}&limit=1`
+  );
+  const row = rows?.[0];
+  if (!row?.active || !isDevisOwnerRole(row.role)) return null;
+  return row;
+}
+
 export async function GET(request) {
   try {
     const auth = await requireApiSession(request);
@@ -83,7 +104,7 @@ export async function GET(request) {
     if (kind) path += `&kind=eq.${encodeURIComponent(kind)}`;
     path += await commercialScopeQuery(auth.profile, auth.user.id);
 
-    const rows = await serviceRequest(path);
+    const rows = await listAllRows(path);
     const linesMap = await loadLines((rows || []).map(row => row.id));
     return Response.json({
       documents: (rows || []).map(row => devisToUi(row, linesMap[row.id] || [])),
@@ -102,14 +123,47 @@ export async function POST(request) {
       return Response.json({ error: "Création de devis non autorisée." }, { status: 403 });
     }
 
-    const body = await request.json();
-    const requestedKind = body.kind || "Devis";
+    const bodyRaw = await request.json();
+    const requestedKind = bodyRaw.kind || "Devis";
     const moduleName = kindToModule(requestedKind);
-    if (!canAccessModule(auth.profile, moduleName) && !["Admin VIP", "Admin second", "Direction", "Secrétariat", "Responsable commercial"].includes(auth.profile.role)) {
+    if (requestedKind === "Facture" && !canInvoiceQuote(auth.profile)) {
+      return Response.json({ error: "La facturation d’un devis n’est pas autorisée pour ce profil." }, { status: 403 });
+    }
+    if (!canAccessModule(auth.profile, moduleName) && !["Admin VIP", "Superadmin", "Direction", "Secrétariat", "Responsable commercial"].includes(normalizeRoleLabel(auth.profile.role))) {
       return Response.json({ error: `Accès refusé au module ${moduleName}.` }, { status: 403 });
     }
     if (!serviceRoleConfigured()) {
       return Response.json({ error: "SUPABASE_SERVICE_ROLE_KEY manquant." }, { status: 503 });
+    }
+    const requestedOwner = bodyRaw.commercialId || bodyRaw.commercial_id || "";
+    const assignError = devisCommercialRequiredError(auth.profile, requestedOwner);
+    if (assignError) {
+      return Response.json({ error: assignError }, { status: 400 });
+    }
+    let ownerId = resolveDevisOwnerId(auth.profile, auth.user.id, requestedOwner);
+    if (mustAssignDevisCommercial(auth.profile) && ownerId) {
+      const owner = await loadAssignableDevisOwner(auth.profile.organization_id, ownerId);
+      if (!owner) ownerId = "";
+    }
+    let conversion = null;
+    let body = bodyRaw;
+    try {
+      const teamIds = await loadTeamMemberIds(auth.profile, auth.user.id, {
+        forDispatch: isProspectDispatcher(auth.profile),
+      });
+      const resolved = await resolveDevisRecipient(bodyRaw, {
+        orgId: auth.profile.organization_id,
+        userId: auth.user.id,
+        profile: auth.profile,
+        teamIds: teamIds || [],
+      });
+      body = resolved.body;
+      conversion = resolved.conversion;
+    } catch (error) {
+      return Response.json(
+        { error: error.message || "Conversion du prospect impossible.", errors: error.errors },
+        { status: error.status || 400 }
+      );
     }
     let items = body.items;
     if (typeof items === "string") {
@@ -125,19 +179,15 @@ export async function POST(request) {
       {
         organizationId: auth.profile.organization_id,
         createdBy: auth.user.id,
-        defaultCommercialId: auth.user.id,
+        defaultCommercialId: ownerId || (mustAssignDevisCommercial(auth.profile) ? null : auth.user.id),
       }
     );
-
-    if (!canViewAllDevis(auth.profile)) {
-      header.commercial_id = auth.user.id;
-    }
+    header.commercial_id = mustAssignDevisCommercial(auth.profile) ? ownerId || null : auth.user.id;
 
     const errors = validateDevisPayload(header, lines);
     if (errors.length) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
     }
-
     header.numero_devis = await allocateNumber(auth.profile.organization_id, header.kind);
     header.created_at = new Date().toISOString();
 
@@ -152,11 +202,13 @@ export async function POST(request) {
     }
 
     const lineRows = lines.map(line => ({ ...line, devis_id: created.id }));
-    const savedLines = await serviceRequest("/rest/v1/devis_lignes", {
-      method: "POST",
-      headers: { Prefer: "return=representation" },
-      body: lineRows,
-    });
+    const savedLines = lineRows.length
+      ? await serviceRequest("/rest/v1/devis_lignes", {
+          method: "POST",
+          headers: { Prefer: "return=representation" },
+          body: lineRows,
+        })
+      : [];
 
     try {
       await logStatusChange({
@@ -184,9 +236,27 @@ export async function POST(request) {
         client_id: created.client_id,
       },
     });
+    if (conversion?.created && conversion.client?.id) {
+      await logActivity({
+        ...actorFromAuth(auth),
+        action: ACTIVITY_ACTIONS.CLIENT_CREATE,
+        module: "Clients",
+        entityType: "client",
+        entityId: conversion.client.id,
+        entityLabel: conversion.client.name || conversion.client.id,
+        newValue: {
+          statut: conversion.client.status,
+          source: "prospect",
+        },
+      });
+    }
 
     return Response.json(
-      { document: devisToUi(created, savedLines || lineRows) },
+      {
+        document: devisToUi(created, savedLines || lineRows),
+        client: conversion?.client || null,
+        convertedProspectId: conversion?.prospectId || null,
+      },
       { status: 201 }
     );
   } catch (error) {

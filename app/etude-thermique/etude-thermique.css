@@ -1,0 +1,88 @@
+.thermal-app .save-toast.is-error{background:#8d2a2a;max-width:420px}
+.existing-client-gate{max-width:720px;margin:18px auto;padding:22px}
+.existing-client-gate h2{margin:0 0 8px;font-size:22px;color:#27427f}
+.thermal-app .thermal-paper{padding:10mm 11mm 16mm}
+.thermal-app .document-head{margin-bottom:4mm;padding-bottom:5mm}
+.thermal-app .document-head h1{font-size:22px}
+.thermal-identity{display:grid;grid-template-columns:1fr 1fr;gap:3mm;margin-bottom:0}
+.thermal-identity-search{grid-column:1 / -1}
+.thermal-identity-search .directory-search{margin:0}
+.thermal-identity-search .directory-search-head{margin:0}
+.thermal-identity-search .directory-search-help{margin:0}
+.thermal-identity label,.thermal-metrics label,.thermal-sign>label{display:flex;flex-direction:column;gap:3px;font-size:8px;font-weight:700;color:#52617d}
+.thermal-identity label.wide{grid-column:1 / -1;position:relative}
+.thermal-address-input{display:flex;align-items:center;gap:6px}
+.thermal-address-input input{flex:1}
+.thermal-address-input .spin{flex-shrink:0;color:#405fae;animation:thermal-spin 1s linear infinite}
+@keyframes thermal-spin{to{transform:rotate(360deg)}}
+.thermal-identity input,.thermal-metrics input,.thermal-formula input,.thermal-columns input,.thermal-sign input{width:100%;border:1px solid #bfc9dc;border-radius:5px;padding:7px 8px;background:#fbfcff;font:10px Arial;color:#233252}
+.thermal-print-address{display:none;margin:0 0 3mm;font-size:10px;color:#233252}
+.thermal-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:3mm;margin:2mm 0 4mm}
+.thermal-metrics>div{border:1px solid #c9d3e4;background:#eef3ff;border-radius:6px;padding:7px 9px;display:flex;flex-direction:column;gap:2px}
+.thermal-metrics small{font-size:8px;font-weight:700;color:#52617d;text-transform:uppercase}
+.thermal-metrics b{font-size:16px;color:#27427f}
+.thermal-power span{font-size:8px;color:#5d6b82}
+.thermal-score-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2mm;margin-bottom:3mm}
+.thermal-score-col{border:1px solid #c4cedf;border-radius:6px;overflow:hidden;background:#fff}
+.thermal-score-col b{display:block;background:#405fae;color:#fff;font-size:7px;letter-spacing:.2px;text-align:center;padding:6px 4px;line-height:1.25;min-height:28px}
+.thermal-score-col button{width:100%;display:grid;grid-template-columns:14px 1fr;align-items:center;gap:5px;border:0;border-top:1px solid #d7deea;background:#fff;padding:5px 6px;cursor:pointer;text-align:left;font:7px/1.25 Arial;color:#233252}
+.thermal-score-col button i{width:14px;height:14px;display:grid;place-items:center;border-radius:3px;background:#eef3ff;color:#27427f;font-style:normal;font-weight:700}
+.thermal-score-col button.selected{background:#ffcc00}
+.thermal-score-col button.selected i{background:#27427f;color:#fff}
+.thermal-g-table{display:flex;flex-wrap:wrap;gap:2mm;margin:0 0 4mm}
+.thermal-g-table span{font-size:7px;border:1px solid #d0d7e4;border-radius:99px;padding:3px 7px;color:#5d6b82}
+.thermal-g-table span.active{background:#405fae;border-color:#405fae;color:#fff;font-weight:700}
+.thermal-formula{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;background:#eef3ff;border:1px solid #c9d3e4;border-radius:8px;padding:8px 10px;margin-bottom:4mm;font-size:9px;color:#52617d}
+.thermal-formula b,.thermal-formula strong{color:#27427f;font-size:13px}
+.thermal-formula.compact{margin-bottom:3mm}
+.thermal-formula label{display:flex;align-items:center;gap:5px;font-size:8px;font-weight:700}
+.thermal-formula input{width:54px;padding:5px}
+.thermal-columns{display:grid;grid-template-columns:1fr 1.15fr;gap:4mm}
+.thermal-columns h3{margin:0 0 3mm;background:#405fae;color:#fff;font-size:9px;letter-spacing:.4px;text-transform:uppercase;text-align:center;padding:6px}
+.thermal-columns table{width:100%;border-collapse:collapse;font-size:8px}
+.thermal-columns th{text-align:left;color:#52617d;border-bottom:1px solid #d5dce8;padding:0 4px 4px}
+.thermal-columns td{border-bottom:1px solid #e6ebf3;padding:4px;vertical-align:middle}
+.thermal-columns td input{padding:5px 6px}
+.thermal-euro-field{display:flex;align-items:center;min-width:0;border:1px solid #bfc9dc;border-radius:5px;background:#fbfcff;overflow:hidden}
+.thermal-euro-field input{border:0!important;background:transparent!important;border-radius:0;padding:5px 4px 5px 6px;min-width:0;flex:1}
+.thermal-euro-field span{flex:none;padding:0 7px 0 2px;color:#27427f;font:700 11px Arial;line-height:1}
+.thermal-current-total{display:flex;justify-content:space-between;align-items:center;margin-top:3mm;background:#fff8d8;border:1px solid #efd772;border-radius:6px;padding:7px 9px;font-size:9px}
+.thermal-sign{display:grid;grid-template-columns:42mm 1fr;gap:8mm;align-items:end;margin-top:5mm}
+.thermal-signature .quote-signature-pad canvas{height:38mm;border:1px solid #c4cedf;border-radius:8px}
+.thermal-app .legal{position:static;margin-top:5mm}
+.thermal-loading{display:grid;place-items:center;min-height:100vh;font-weight:700;color:#52617d}
+@media screen and (max-width:760px){
+  .thermal-identity,.thermal-metrics,.thermal-score-grid,.thermal-columns,.thermal-sign{grid-template-columns:1fr}
+  .thermal-score-grid{grid-template-columns:1fr 1fr}
+}
+@media print{
+  @page{size:A4;margin:0}
+  html,body,.thermal-app{background:#fff!important;padding:0!important}
+  .form-toolbar,.save-toast,.thermal-screen-only,.doc-preview-bar{display:none!important}
+  .thermal-app .paper,.thermal-app .thermal-paper{
+    width:210mm;
+    min-height:297mm;
+    margin:0;
+    box-shadow:none;
+    padding:10mm 11mm 16mm;
+  }
+  .thermal-app,.thermal-paper,.thermal-identity,.thermal-metrics,.thermal-score-grid,.thermal-g-table,.thermal-formula,.thermal-columns,.thermal-sign,.document-head,.document-parties,.document-party{
+    print-color-adjust:exact;
+    -webkit-print-color-adjust:exact;
+  }
+  .thermal-identity input,.thermal-metrics input,.thermal-formula input,.thermal-columns input,.thermal-sign input{
+    background:#fbfcff!important;
+    border:1px solid #bfc9dc!important;
+    color:#233252!important;
+    print-color-adjust:exact;
+    -webkit-print-color-adjust:exact;
+  }
+  .thermal-euro-field{border:1px solid #bfc9dc!important;background:#fbfcff!important}
+  .thermal-euro-field input{border:0!important;background:transparent!important}
+  .thermal-score-col{break-inside:avoid}
+  .thermal-score-col button{break-inside:avoid;cursor:default}
+  .thermal-score-col button.selected{background:#ffcc00!important}
+  .thermal-score-col button.selected i{background:#27427f!important;color:#fff!important}
+  .thermal-g-table span.active{background:#405fae!important;color:#fff!important}
+  .quote-signature-pad-head button,.quote-signature-pad small,.signature-pad>div button,.signature-pad>small{display:none!important}
+}

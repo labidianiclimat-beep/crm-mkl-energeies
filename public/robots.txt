@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /a-propos
+Allow: /confidentialite
+Allow: /cgu
+Allow: /mkl-energies.png

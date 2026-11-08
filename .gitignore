@@ -8,3 +8,33 @@ node_modules
 !.env.example
 *.log
 .vercel
+tmp
+
+# Configurations privées Cursor (MCP et réglages locaux)
+.cursor/
+
+# Clés, certificats et archives de base
+*.pem
+*.key
+*.p12
+*.pfx
+*.dump
+*.sql.gz
+*.backup
+
+# Socle de recette : fichier assemblé, régénérable par
+# scripts/recette/construire-schema.mjs. Il recopierait 2,6 Mo de contenu
+# déjà présent dans supabase/migrations/.
+scripts/recette/schema-recette.sql
+
+# Lots du socle de recette : assemblés par scripts/recette/decouper-socle.mjs.
+scripts/recette/lots/
+
+# Données et substituts locaux du site OVH : jamais versionnés, pour qu un
+# substitut de recette ne puisse pas être déployé à la place du vrai fichier.
+ovh-site/data/
+
+# État local du client Supabase. « linked-project.json » nomme le projet
+# auquel ce poste est rattaché : versionné, ce rattachement voyagerait avec le
+# dépôt, et une commande lancée ailleurs viserait le projet d un autre.
+supabase/.temp/

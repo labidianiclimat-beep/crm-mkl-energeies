@@ -84,6 +84,7 @@ test("ADMIN — accès org entière + modules sensibles", () => {
   assert.equal(canAccessModule(admin, "Utilisateurs"), true);
   assert.equal(canPerformAction(admin, "invite_users"), true);
   assert.equal(canPerformAction(admin, "view_all_clients"), true);
+  assert.equal(canPerformAction(admin, "delete_prospects"), true);
   const allowed = resolveAllowedModules(admin, defaults);
   assert.equal(canAccessNav(allowed, "Utilisateurs"), true);
   assert.equal(canAccessNav(allowed, "Devis"), true);
@@ -102,6 +103,9 @@ test("RESPONSABLE COMMERCIAL — voit son équipe, pas l’org hors équipe", ()
   assert.equal(canAccessScopedRow(lead, LEAD_ID, devisCom2, teamOfLead), false);
   assert.equal(canAccessModule(lead, "Utilisateurs"), false);
   assert.equal(canPerformAction(lead, "invite_users"), false);
+  assert.equal(canPerformAction(lead, "export_clients"), false);
+  assert.equal(canPerformAction(lead, "delete_appointment"), false);
+  assert.equal(canPerformAction(lead, "delete_prospects"), false);
 });
 
 test("COMMERCIAL 1 — uniquement ses clients et devis", () => {
@@ -112,6 +116,9 @@ test("COMMERCIAL 1 — uniquement ses clients et devis", () => {
   assert.equal(canAccessScopedRow(com1, COM1_ID, devisCom2), false);
   assert.equal(canAccessModule(com1, "Utilisateurs"), false);
   assert.equal(canPerformAction(com1, "view_all_clients"), false);
+  assert.equal(canPerformAction(com1, "export_clients"), false);
+  assert.equal(canPerformAction(com1, "delete_appointment"), false);
+  assert.equal(canPerformAction(com1, "delete_prospects"), false);
 });
 
 test("COMMERCIAL 2 — ne voit jamais les données du Commercial 1", () => {
@@ -140,6 +147,23 @@ test("URL directes refusées côté serveur — /admin et /users", () => {
   assert.equal(deniedDirectUrlReason("/users/abc"), "users");
   assert.equal(deniedDirectUrlReason("/"), null);
   assert.equal(deniedDirectUrlReason("/activation"), null);
+  assert.equal(deniedDirectUrlReason("/a-propos"), null);
+  assert.equal(deniedDirectUrlReason("/confidentialite"), null);
+  assert.equal(deniedDirectUrlReason("/cgu"), null);
+});
+
+test("RESPONSABLE PROSPECTION — org dispatch sans devis ni clients", () => {
+  const dispatcher = profile("Responsable prospection", "disp-1");
+  assert.equal(canAccessModule(dispatcher, "Prospects"), true);
+  assert.equal(canAccessModule(dispatcher, "Devis"), false);
+  assert.equal(canAccessModule(dispatcher, "Clients"), false);
+  assert.equal(resolveScopedCommercialIds(dispatcher, "disp-1", [], { forDispatch: true }), null);
+  assert.deepEqual(resolveScopedCommercialIds(dispatcher, "disp-1"), ["disp-1"]);
+  assert.equal(canAccessScopedRow(dispatcher, "disp-1", clientCom1), false);
+  assert.equal(canAccessScopedRow(dispatcher, "disp-1", { organization_id: ORG, commercial_id: COM2_ID, created_by: COM2_ID }, [], { forDispatch: true }), true);
+  const allowed = resolveAllowedModules(dispatcher, defaults);
+  assert.equal(canAccessNav(allowed, "Devis"), false);
+  assert.equal(canAccessNav(allowed, "Prospects"), true);
 });
 
 test("simulation accès API — commercial 2 sur ids commercial 1 = refus", () => {
@@ -148,5 +172,5 @@ test("simulation accès API — commercial 2 sur ids commercial 1 = refus", () =
   const allowDevis = canAccessScopedRow(com2, COM2_ID, devisCom1);
   assert.equal(allowClient, false);
   assert.equal(allowDevis, false);
-  // Réponse attendue côté API : 404 « introuvable ou accès refusé »
+  // Réponse attendue côté API : 404 « introuvable ou accès refusé */
 });

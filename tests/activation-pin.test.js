@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   generateActivationPin,
   hashActivationPin,
@@ -57,4 +58,15 @@ test("personal pin must differ from temporary pin", async () => {
   const { validatePersonalPinChoice } = await import("../app/lib/activation-pin.js");
   assert.equal(validatePersonalPinChoice("123456", "123456", "123456").ok, false);
   assert.equal(validatePersonalPinChoice("123456", "654321", "654321").ok, true);
+});
+
+test("la connexion iPad lit le PIN affiché et libère la place de la session", () => {
+  const gate = readFileSync(new URL("../app/components/crm-access-gate.js", import.meta.url), "utf8");
+  const rest = readFileSync(new URL("../app/lib/supabase-rest.js", import.meta.url), "utf8");
+  assert.match(gate, /form\.elements\.pin/);
+  assert.match(gate, /name="pin"/);
+  assert.match(gate, /defaultValue=\{pin\}/);
+  assert.doesNotMatch(gate, /one-time-code/);
+  assert.doesNotMatch(gate, /value=\{pin\}/);
+  assert.match(rest, /freeLocalStorageForSession/);
 });

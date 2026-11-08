@@ -1,5 +1,6 @@
 import { getProfileForToken } from "./supabase-server";
 import { canAccessApiModule, canPerformAction, isAdminRole } from "./permissions";
+import { withUserPreview } from "./user-preview-server";
 
 export function readBearerToken(request) {
   const header = request.headers.get("authorization") || "";
@@ -17,16 +18,19 @@ export async function requireApiSession(request, { module = null, action = null,
     return { ok: false, status: 401, error: "Session expirée. Reconnectez-vous avec votre email et votre PIN." };
   }
 
-  const { user, profile } = await getProfileForToken(accessToken);
-  if (!user?.id || !profile) {
+  const { user, profile: rawProfile } = await getProfileForToken(accessToken);
+  if (!user?.id || !rawProfile) {
     return { ok: false, status: 401, error: "Profil utilisateur introuvable." };
   }
 
-  if (!allowPendingActivation && !profileIsActivated(profile)) {
+  const profile = await withUserPreview(rawProfile, request);
+  const scopedUser = profile.previewUserId ? { ...user, id: profile.previewUserId } : user;
+
+  if (!allowPendingActivation && !rawProfile.onboarding_completed_at) {
     return { ok: false, status: 403, error: "Activation du compte requise." };
   }
 
-  if (!profile.active && !allowPendingActivation) {
+  if (!allowPendingActivation && !rawProfile.active) {
     return { ok: false, status: 403, error: "Compte inactif." };
   }
 
@@ -38,7 +42,7 @@ export async function requireApiSession(request, { module = null, action = null,
     return { ok: false, status: 403, error: "Action non autorisée." };
   }
 
-  return { ok: true, user, profile, accessToken };
+  return { ok: true, user: scopedUser, profile, accessToken, realUserId: user.id };
 }
 
 export function canInviteUsers(profile) {

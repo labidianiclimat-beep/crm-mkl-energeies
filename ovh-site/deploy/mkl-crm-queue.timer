@@ -1,0 +1,15 @@
+[Unit]
+Description=Vide la file des demandes du site dans le CRM, chaque minute
+Documentation=file:/opt/mkl/deploy/PLAN-DEPLOIEMENT.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+# Toutes les exécutions manquées pendant un arrêt ne sont pas rejouées une à
+# une : la file est persistante, un seul passage suffit à la vider.
+Persistent=false
+AccuracySec=5s
+Unit=mkl-crm-queue.service
+
+[Install]
+WantedBy=timers.target
