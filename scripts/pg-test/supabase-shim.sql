@@ -160,6 +160,14 @@ create table if not exists storage.objects (
   updated_at timestamptz not null default now()
 );
 
+create or replace function storage.foldername(name text)
+returns text[]
+language sql
+immutable
+as $$
+  select string_to_array(name, '/');
+$$;
+
 grant all on storage.buckets, storage.objects to service_role;
 
 -- ---------------------------------------------------------------------------

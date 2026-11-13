@@ -131,7 +131,8 @@ async function main() {
       for each row execute function public.recette_bloquer_gain();
     `);
     await sql.unsafe(fichierSql("supabase/migrations/20261113_devis_signatures.sql"));
-    rapport.ok("Migration appliquée sur la base locale signature_recette");
+    await sql.unsafe(fichierSql("supabase/migrations/20261113_devis_signatures_rls_securite.sql"));
+    rapport.ok("Migrations appliquées sur la base locale signature_recette");
 
     const depot = await appel(sql, {
       devis: DEVIS_1, action: "demande", actor: COMMERCIAL, digest: "a".repeat(64), key: "b".repeat(64),
