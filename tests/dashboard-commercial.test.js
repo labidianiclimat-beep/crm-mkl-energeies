@@ -32,9 +32,17 @@ test("computes signed CA and conversion rate", () => {
     ],
     clients: [{ status: "Prospect" }, { status: "Client" }],
     appointments: [{ start: new Date(Date.now() + 86400000).toISOString(), prospectName: "RDV", status: "Confirmé" }],
+    sales: [
+      { status: "confirmee", amountTtc: 15000 },
+      { status: "annulee", amountTtc: 4000 },
+      { status: "remplacee", amountTtc: 12000 },
+    ],
   });
   assert.equal(metrics.devisAcceptesCount, 1);
   assert.equal(metrics.caSigne, 1000);
+  assert.equal(metrics.caSigneHistorique, 1000);
+  assert.equal(metrics.caSigneBrutVerifie, 19000);
+  assert.equal(metrics.caSigneNetVerifie, 15000);
   assert.equal(metrics.tauxTransformation, 50);
   assert.equal(metrics.upcomingAppointmentsCount, 1);
   assert.ok(metrics.prochainesActions.length >= 1);
@@ -59,15 +67,54 @@ test("classe le rendement commercial par commercial", () => {
   assert.equal(ranking.length, 2);
   assert.equal(ranking[0].id, "karim");
   assert.equal(ranking[0].caSigne, 4000);
+  assert.equal(ranking[0].caSigneHistorique, 4000);
+  assert.equal(ranking[0].caSigneNetVerifie, 0);
   assert.equal(ranking[0].devisAcceptesCount, 1);
   assert.equal(ranking[1].id, "camille");
   assert.equal(ranking[1].tauxTransformation, 50);
   assert.equal(ranking.some(row => row.id === "vip"), false);
 });
 
+test("le classement net vérifié attribue les ventes et écarte annulations et avenants", () => {
+  const ranking = computeCommercialRanking({
+    commercials: [
+      { id: "camille", name: "Camille Martin", role: "Commercial" },
+      { id: "karim", name: "Karim Bennani", role: "Commercial" },
+    ],
+    devis: [
+      { kind: "Devis", status: "Accepté", totalTTC: 4000, commercialId: "karim", date: "2026-09-01" },
+      { kind: "Devis", status: "Accepté", totalTTC: 17000, commercialId: "camille", date: "2026-09-02" },
+    ],
+    sales: [
+      { status: "confirmee", amountTtc: 15000, commercialId: "camille" },
+      { status: "annulee", amountTtc: 4000, commercialId: "camille" },
+      { status: "remplacee", amountTtc: 12000, commercialId: "camille" },
+      { status: "demande", amountTtc: 900, commercialId: "camille" },
+      { status: "confirmee", amountTtc: 3000, commercialId: "karim" },
+      { status: "confirmee", amountTtc: 800, commercialId: "absent" },
+    ],
+  });
+  assert.equal(ranking[0].id, "camille");
+  assert.equal(ranking[0].caSigneNetVerifie, 15000);
+  assert.equal(ranking[0].caSigneBrutVerifie, 19000);
+  assert.equal(ranking[0].caSigneHistorique, 17000);
+  assert.equal(ranking[1].id, "karim");
+  assert.equal(ranking[1].caSigneNetVerifie, 3000);
+  assert.equal(ranking[1].caSigneHistorique, 4000);
+  const loose = ranking.find(row => row.name === "Non affecté");
+  assert.equal(loose.caSigneNetVerifie, 800);
+});
+
 test("le tableau de bord affiche le classement d equipe", () => {
   const page = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
   const api = readFileSync(new URL("../app/api/dashboard/commercial/route.js", import.meta.url), "utf8");
+  assert.match(page, /CA historique des devis acceptés/);
+  assert.match(page, /CA signé brut vérifié/);
+  assert.match(page, /CA signé net vérifié/);
+  assert.match(page, /CA HISTORIQUE DES DEVIS ACCEPTÉS/);
+  assert.match(page, /CA SIGNÉ NET VÉRIFIÉ/);
+  assert.match(page, /caSigneNetVerifie/);
+  assert.match(api, /devis_signatures/);
   assert.match(page, /Rendement de l’équipe/);
   assert.match(page, /ranking-table/);
   assert.match(api, /computeCommercialRanking/);

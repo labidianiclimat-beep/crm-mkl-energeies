@@ -35,6 +35,23 @@ function canFilterByCommercial(profile) {
   return canViewOrgWideCommercialData(profile) || canViewTeamCommercialData(profile);
 }
 
+async function loadVerifiedSales(orgId) {
+  try {
+    const rows = await serviceRequest(
+      `/rest/v1/devis_signatures?select=status,amount_ttc,commercial_id&organization_id=eq.${encodeURIComponent(orgId)}`
+    );
+    return (rows || []).map(row => ({
+      status: row.status,
+      amountTtc: Number(row.amount_ttc),
+      commercialId: row.commercial_id || "",
+    }));
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (/devis_signatures|PGRST205|42P01|schema cache/i.test(message)) return [];
+    throw error;
+  }
+}
+
 export async function GET(request) {
   try {
     const auth = await requireApiSession(request);
@@ -155,13 +172,25 @@ export async function GET(request) {
     }
 
     // Agence : placeholder org unique MKL pour l’instant
+    let verifiedSales = await loadVerifiedSales(orgId);
     if (!isOrganizationAgency(agency)) {
       devis = [];
       clients = [];
       opportunities = [];
       appointments = [];
       maintenanceContracts = [];
+      verifiedSales = [];
     }
+    if (canRank && !canViewAllClients(auth.profile)) {
+      const teamIds = await loadTeamMemberIds(auth.profile, auth.user.id);
+      const allowed = new Set((teamIds || [auth.user.id]).map(String));
+      verifiedSales = verifiedSales.filter(row => allowed.has(String(row.commercialId)));
+    } else if (!canRank) {
+      verifiedSales = verifiedSales.filter(row => String(row.commercialId) === String(commercialId));
+    }
+    const metricSales = commercialId
+      ? verifiedSales.filter(row => String(row.commercialId) === String(commercialId))
+      : verifiedSales;
 
     let commercials = [];
     if (canRank) {
@@ -194,6 +223,7 @@ export async function GET(request) {
           clients,
           prospects: opportunities,
           appointments,
+          sales: verifiedSales,
         })
       : [];
 
@@ -205,6 +235,7 @@ export async function GET(request) {
       clients: commercialId ? clients.filter(row => belongsToCommercial(row, commercialId)) : clients,
       prospects: commercialId ? opportunities.filter(row => belongsToCommercial(row, commercialId)) : opportunities,
       appointments: commercialId ? appointments.filter(row => belongsToCommercial(row, commercialId)) : appointments,
+      sales: metricSales,
     });
     if (maintenanceSelected) {
       metrics.caSigne = sumContractAmounts(scopedContracts);

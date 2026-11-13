@@ -261,6 +261,17 @@ export async function serviceRequest(path, options = {}) {
   return request(path, { ...options, apiKey: serviceRoleKey, token: serviceRoleKey });
 }
 
+/** Lecture REST avec le jeton de l’utilisateur. Les règles RLS s’appliquent. */
+export async function restAsUser(path, accessToken) {
+  if (!accessToken) {
+    const error = new Error("Le devis enregistré ne peut pas être relu.");
+    error.code = "DEVIS_UNREADABLE";
+    error.status = 503;
+    throw error;
+  }
+  return request(path, { method: "GET", token: accessToken });
+}
+
 export async function generateInviteLink({ email, redirectTo, metadata = {} }) {
   return serviceRequest("/auth/v1/admin/generate_link", {
     method: "POST",

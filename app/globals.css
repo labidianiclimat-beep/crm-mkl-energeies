@@ -543,6 +543,17 @@
 .client-followup-block{background:#fff;border:1px solid #e5e9f1;border-radius:12px;padding:14px 16px}
 .client-followup-block>b{display:block;color:#12264c;font-size:13px}
 .client-followup-block>span{display:block;margin:3px 0 10px;color:#7d8799;font-size:11px}
+.commercial-sale-panel{margin-top:14px;padding:14px;border:1px solid #d5dcea;border-radius:12px;background:#f8f9fc;color:#172851}
+.commercial-sale-panel h3{margin:0 0 6px;font:700 15px/1.3 Manrope}
+.commercial-sale-panel p,.commercial-sale-panel li{font:500 13px/1.4 "DM Sans"}
+.commercial-sale-panel .sale-state{display:inline-block;margin:6px 0;padding:4px 10px;border-radius:999px;background:#fff6d8;color:#152347;font:700 12px "DM Sans"}
+.commercial-sale-panel .sale-state.is-verified{background:#e7f6ec;color:#166534}
+.commercial-sale-panel .sale-state.is-historical{background:#eef1f6;color:#5d6b88}
+.commercial-sale-panel .sale-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:10px}
+.commercial-sale-panel .sale-actions label{display:flex;flex-direction:column;gap:4px;font:700 12px "DM Sans"}
+.commercial-sale-panel .sale-error{color:#9f1239}
+.commercial-sale-panel ul{margin:8px 0 0;padding:0;list-style:none}
+.commercial-sale-panel li{padding:6px 0;border-top:1px solid #e6ebf3}
 .client-followup-card{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 0;border-top:1px solid #eef1f6}
 .client-followup-card:first-of-type{border-top:0;padding-top:0}
 .client-followup-card small{display:block;color:#405fae;font-size:10px;font-weight:700}
@@ -1566,6 +1577,7 @@ section.client-record .client-vault-card-actions button.trash{flex:0 0 40px;back
 .ranking-panel{margin-top:16px}
 .ranking-table{margin:0 18px 18px;width:auto;overflow-x:auto}
 .ranking-table .data-row{grid-template-columns:minmax(150px,1.5fr) repeat(5,minmax(58px,.55fr)) minmax(70px,.65fr) minmax(88px,.8fr) minmax(96px,.9fr);min-width:920px;cursor:pointer;width:100%;border:0;background:#fff;text-align:left;font:inherit}
+.ranking-table.is-verified .data-row{grid-template-columns:minmax(150px,1.4fr) repeat(5,minmax(58px,.5fr)) minmax(64px,.55fr) minmax(80px,.7fr) minmax(120px,1fr) minmax(110px,.9fr);min-width:1080px}
 .ranking-table .data-head{cursor:default}
 .ranking-table .data-row.is-selected{background:#fff8d6}
 .ranking-table .data-row:not(.data-head):hover{background:#f7f9fe}

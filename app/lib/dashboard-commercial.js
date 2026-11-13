@@ -1,5 +1,6 @@
 import { isDevisOwnerRole } from "./devis.js";
 import { maintenanceTtc } from "./entretien-agenda.js";
+import { commercialSaleTotals } from "./commercial-sale.js";
 
 /** Métriques tableau de bord commercial (ÉTAPE 11). */
 
@@ -24,6 +25,7 @@ export function computeCommercialDashboard({
   clients = [],
   prospects = [],
   appointments = [],
+  sales = [],
   now = Date.now(),
 } = {}) {
   const quotes = (devis || []).filter(item => (item.kind || "Devis") === "Devis");
@@ -32,6 +34,7 @@ export function computeCommercialDashboard({
   const devisAcceptes = quotes.filter(item => item.status === "Accepté");
   const devisRefuses = quotes.filter(item => item.status === "Refusé");
   const caSigne = devisAcceptes.reduce((sum, item) => sum + Number(item.totalTTC ?? item.total_ttc ?? 0), 0);
+  const verified = commercialSaleTotals(sales);
   const decided = devisAcceptes.length + devisRefuses.length;
   const tauxTransformation = decided > 0 ? Math.round((devisAcceptes.length / decided) * 1000) / 10 : 0;
 
@@ -73,6 +76,9 @@ export function computeCommercialDashboard({
     devisARelancerCount: devisARelancer.length,
     devisAcceptesCount: devisAcceptes.length,
     caSigne,
+    caSigneHistorique: caSigne,
+    caSigneBrutVerifie: verified.brut,
+    caSigneNetVerifie: verified.net,
     tauxTransformation,
     pipelineValue: devisEnCours.reduce((sum, item) => sum + Number(item.totalTTC ?? item.total_ttc ?? 0), 0),
     clientsCount: (clients || []).length,
@@ -224,12 +230,21 @@ export function belongsToCommercial(row, commercialId) {
   );
 }
 
+function salesForCommercial(sales, userId, knownIds) {
+  return (sales || []).filter(sale => {
+    const owner = String(sale?.commercialId || sale?.commercial_id || "");
+    if (!userId) return !knownIds.has(owner);
+    return owner === String(userId);
+  });
+}
+
 export function computeCommercialRanking({
   commercials = [],
   devis = [],
   clients = [],
   prospects = [],
   appointments = [],
+  sales = [],
   now = Date.now(),
 } = {}) {
   const people = (commercials || [])
@@ -255,7 +270,11 @@ export function computeCommercialRanking({
   (appointments || []).forEach(row => push("appointments", row));
 
   function toRow(user, bucket) {
-    const metrics = computeCommercialDashboard({ ...bucket, now });
+    const metrics = computeCommercialDashboard({
+      ...bucket,
+      sales: salesForCommercial(sales, user.id, knownIds),
+      now,
+    });
     return {
       id: user.id,
       name: user.name,
@@ -266,17 +285,24 @@ export function computeCommercialRanking({
       devisARelancerCount: metrics.devisARelancerCount,
       devisAcceptesCount: metrics.devisAcceptesCount,
       caSigne: metrics.caSigne,
+      caSigneHistorique: metrics.caSigneHistorique,
+      caSigneBrutVerifie: metrics.caSigneBrutVerifie,
+      caSigneNetVerifie: metrics.caSigneNetVerifie,
       tauxTransformation: metrics.tauxTransformation,
       pipelineValue: metrics.pipelineValue,
     };
   }
 
   const rows = people.map(user => toRow(user, buckets.get(user.id)));
-  if (Object.values(unassigned).some(list => list.length)) {
+  const hasUnassignedSales = salesForCommercial(sales, "", knownIds).length > 0;
+  if (hasUnassignedSales || Object.values(unassigned).some(list => list.length)) {
     rows.push(toRow({ id: "", name: "Non affecté", role: "" }, unassigned));
   }
 
   return rows.sort((left, right) => {
+    if ((right.caSigneNetVerifie || 0) !== (left.caSigneNetVerifie || 0)) {
+      return (right.caSigneNetVerifie || 0) - (left.caSigneNetVerifie || 0);
+    }
     if (right.caSigne !== left.caSigne) return right.caSigne - left.caSigne;
     if (right.tauxTransformation !== left.tauxTransformation) return right.tauxTransformation - left.tauxTransformation;
     if (right.devisAcceptesCount !== left.devisAcceptesCount) return right.devisAcceptesCount - left.devisAcceptesCount;

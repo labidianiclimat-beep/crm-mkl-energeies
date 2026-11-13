@@ -5,6 +5,7 @@ import { useRecordTable } from "./lib/use-record-table";
 import { INSTALLATION_CHECKS, canEditInstallation, installationAssigneeLabel, installationBoards, installationCheckLabel, installationCheckValue, installationChecksFromForm, isFinishedInstallation, isSubcontractor, SUBCONTRACTOR_DOCUMENTS, SUBCONTRACTOR_SPECIALTIES, contractorDocumentReady } from "./lib/installation-planning";
 import { canReadInstallationFinance, canWriteInstallationFinance, emptyInstallationFinance, financeToDraft, installationSalespeople, stripInstallationFinance, validateInstallationFinance } from "./lib/installation-finance";
 import InstallationFinanceFields, { InstallationFinanceSummary } from "./components/installation-finance-fields";
+import CommercialSalePanel from "./components/commercial-sale-panel";
 import SubcontractorDocuments from "./components/subcontractor-documents";
 import { DEFAULT_ARTICLE_GROUPS } from "./lib/org-state";
 import { canAccessNav, canAccessWorkspace, homeFamiliesForRole, isVipOnlyNav, resolveAllowedModules, workspaceTitle } from "./lib/access-control";
@@ -2135,7 +2136,9 @@ function CommercialOverview({navigate,allowedModules=null,userName="Utilisateur"
         <Kpi icon={FileText} title="Devis en cours" value={String(metrics.devisEnCoursCount)} note={euro(metrics.pipelineValue||0)} sub="pipeline devis" tone="sun"/>
         <Kpi icon={AlertTriangle} title="À relancer" value={String(metrics.devisARelancerCount)} note="suivi" sub="actions urgentes" tone="clay"/>
         <Kpi icon={CheckCircle2} title="Devis acceptés" value={String(metrics.devisAcceptesCount)} note={`${metrics.tauxTransformation}%`} sub="taux transformation" tone="green"/>
-        <Kpi icon={Euro} title={filters.activity==="Maintenance"?"Contrats d’entretien":"CA signé"} value={filters.activity==="Maintenance"?<span className="kpi-amounts"><span>{euro(metrics.caSigne||0)} <small>HT</small></span><span>{euro(metrics.caSigneTtc||0)} <small>TTC</small></span></span>:euro(metrics.caSigne||0)} note={filters.activity==="Maintenance"?`${metrics.maintenanceContractCount||0} contrats`:"acceptés"} sub={filters.activity==="Maintenance"?"TVA 10 %":"période filtrée"} tone="sun"/>
+        <Kpi icon={Euro} title={filters.activity==="Maintenance"?"Contrats d’entretien":"CA historique des devis acceptés"} value={filters.activity==="Maintenance"?<span className="kpi-amounts"><span>{euro(metrics.caSigne||0)} <small>HT</small></span><span>{euro(metrics.caSigneTtc||0)} <small>TTC</small></span></span>:euro(metrics.caSigneHistorique ?? metrics.caSigne ?? 0)} note={filters.activity==="Maintenance"?`${metrics.maintenanceContractCount||0} contrats`:"devis acceptés"} sub={filters.activity==="Maintenance"?"TVA 10 %":"indicateur historique"} tone="sun"/>
+        {filters.activity!=="Maintenance"&&<Kpi icon={Euro} title="CA signé brut vérifié" value={euro(metrics.caSigneBrutVerifie||0)} note="vérifié" sub="confirmations et annulations" tone="sun"/>}
+        {filters.activity!=="Maintenance"&&<Kpi icon={Euro} title="CA signé net vérifié" value={euro(metrics.caSigneNetVerifie||0)} note="vérifié" sub="après annulations" tone="green"/>}
       </div>
       <div className="grid-main">
         <section className="panel reminders">
@@ -2167,8 +2170,8 @@ function CommercialOverview({navigate,allowedModules=null,userName="Utilisateur"
         </section>
       </div>
       {canFilter&&ranking.length>0&&<section className="panel ranking-panel">
-        <PanelHead title="Rendement de l’équipe" sub="CA signé et transformation, commercial par commercial" link="Devis"/>
-        <div className="data-panel ranking-table">
+        <PanelHead title="Rendement de l’équipe" sub={filters.activity==="Maintenance"?"Contrats et transformation, commercial par commercial":"CA signé net vérifié et CA historique des devis acceptés"} link="Devis"/>
+        <div className={`data-panel ranking-table${filters.activity==="Maintenance"?"":" is-verified"}`}>
           <div className="data-row data-head">
             <span>COMMERCIAL</span>
             <span>PROSPECTS</span>
@@ -2178,7 +2181,8 @@ function CommercialOverview({navigate,allowedModules=null,userName="Utilisateur"
             <span>ACCEPTÉS</span>
             <span>TAUX</span>
             <span>PIPELINE</span>
-            <span>CA SIGNÉ</span>
+            <span>{filters.activity==="Maintenance"?"CA SIGNÉ":"CA HISTORIQUE DES DEVIS ACCEPTÉS"}</span>
+            {filters.activity!=="Maintenance"&&<span>CA SIGNÉ NET VÉRIFIÉ</span>}
           </div>
           {ranking.map((row,index)=>(
             <button
@@ -2195,7 +2199,8 @@ function CommercialOverview({navigate,allowedModules=null,userName="Utilisateur"
               <span>{row.devisAcceptesCount}</span>
               <span><b>{row.tauxTransformation} %</b></span>
               <span>{euro(row.pipelineValue||0)}</span>
-              <span>{filters.activity==="Maintenance"?<><b>{euro(row.caSigne||0)} HT</b><small>{euro(row.caSigneTtc||0)} TTC</small></>:<b>{euro(row.caSigne||0)}</b>}</span>
+              <span>{filters.activity==="Maintenance"?<><b>{euro(row.caSigne||0)} HT</b><small>{euro(row.caSigneTtc||0)} TTC</small></>:<b>{euro(row.caSigneHistorique ?? row.caSigne ?? 0)}</b>}</span>
+              {filters.activity!=="Maintenance"&&<span><b>{euro(row.caSigneNetVerifie||0)}</b></span>}
             </button>
           ))}
         </div>
@@ -3536,7 +3541,7 @@ function Modal({type,close,submit,clients,prospects=[],billing,contracts=[],visi
     {type==="prospect"&&<ProspectFields prospect={editingProspect} commercials={commercials} team={team} canAssignCommercial={canAssignProspectCommercial} deferCommercial={deferCommercial} currentUserId={currentUserId} currentUserName={currentUserName} currentProfile={currentProfile} readOnly={prospectReadOnly} fieldCapture={fieldCapture} billing={billing} contracts={contracts} visits={visits} pvProjects={pvProjects} thermalStudies={thermalStudies} pvSimulations={pvSimulations} articles={articles} appointment={editingAppointment}/>}
     {type==="client"&&<ClientFields client={editingClient} commercials={commercials} team={team} canAssignCommercial={canAssignCommercial} currentUserId={currentUserId} currentUserName={currentUserName} readOnly={clientReadOnly}/>}
     {type==="contract"&&<><RecipientConnect clients={clients} prospects={prospects} allowCreate={false} onSelect={item=>setLinkedClient(item||null)} />{clientReady&&<><label>N° de contrat<input name="number" required placeholder="ENT-2026-…"/></label><label>Prestation<select name="type"><option>Maintenance préventive</option><option>Solaire + PAC</option><option>Supervision et dépannage</option></select></label><div className="form-row"><label>Périodicité<select name="frequency"><option>Annuelle</option><option>Semestrielle</option><option>Trimestrielle</option></select></label><label>Prochaine visite<input name="next" type="date" required/></label></div><div className="form-row"><label>Montant annuel (€)<input name="amount" type="number" min="0" step="any" required/></label><label>Statut<select name="status"><option>Actif</option><option>À planifier</option><option>Suspendu</option></select></label></div></>}</>}
-    {type==="billing"&&<BillingFields clients={clients} prospects={prospects} documents={billing} articles={articles} brands={brands} catalogCategories={catalogCategories} catalogSubcategories={catalogSubcategories} bundles={bundles} nextNumber={nextNumber(defaultBillingKind)} document={editingBilling} defaultKind={defaultBillingKind} canManageCatalog={canManageCatalog} commercials={commercials} canAssignCommercial={canAssignCommercial} mustAssignCommercial={mustAssignCommercial} currentUserId={currentUserId} onClientCreated={onClientCreated} onEnsureBundles={onEnsureBundles}/>}
+    {type==="billing"&&<BillingFields clients={clients} prospects={prospects} documents={billing} articles={articles} brands={brands} catalogCategories={catalogCategories} catalogSubcategories={catalogSubcategories} bundles={bundles} nextNumber={nextNumber(defaultBillingKind)} document={editingBilling} defaultKind={defaultBillingKind} canManageCatalog={canManageCatalog} commercials={commercials} canAssignCommercial={canAssignCommercial} mustAssignCommercial={mustAssignCommercial} currentUserId={currentUserId} profile={currentProfile} onClientCreated={onClientCreated} onEnsureBundles={onEnsureBundles}/>}
     {type==="article"&&<ArticleFields key={editingArticle?.id||"new-article"} article={editingArticle} brands={brands} categories={catalogCategories} subcategories={catalogSubcategories}/>}
     {type==="brand"&&<BrandFields key={editingBrand?.id||"new-brand"} brand={editingBrand} logoUrl={brandLogoDraft} onLogoUrlChange={onBrandLogoDraft}/>}
     {type==="group"&&<CategoryFields groups={groups}/>}
@@ -3735,7 +3740,7 @@ function UserFields({team,user,actorRole}) {
     </div>}
   </div>;
 }
-function BillingFields({clients,prospects=[],documents=[],articles,brands=[],catalogCategories=[],catalogSubcategories=[],bundles,nextNumber,document,defaultKind,canManageCatalog=false,commercials=[],canAssignCommercial=false,mustAssignCommercial=false,currentUserId="",onClientCreated,onEnsureBundles}) {
+function BillingFields({clients,prospects=[],documents=[],articles,brands=[],catalogCategories=[],catalogSubcategories=[],bundles,nextNumber,document,defaultKind,canManageCatalog=false,commercials=[],canAssignCommercial=false,mustAssignCommercial=false,currentUserId="",profile=null,onClientCreated,onEnsureBundles}) {
   const kind=document?.kind||defaultKind||"Devis";
   const statusOptions=statusesForKind(kind);
   const persisted=Boolean(document?.id&&String(document.id).includes("-"));
@@ -3971,6 +3976,7 @@ function BillingFields({clients,prospects=[],documents=[],articles,brands=[],cat
         <b>Représentant MKL Énergies</b>
         <div className="form-row"><label>Nom<input name="representativeLastName" autoComplete="family-name" value={representativeLastName} onChange={e=>setRepresentativeLastName(e.target.value)} placeholder="Nom"/></label><label>Prénom<input name="representativeFirstName" autoComplete="given-name" value={representativeFirstName} onChange={e=>setRepresentativeFirstName(e.target.value)} placeholder="Prénom"/></label></div>
         <SignaturePad name="representativeSignature" title="Signature du représentant" value={representativeSignature} onChange={setRepresentativeSignature} />
+        {persisted&&<CommercialSalePanel document={{...document,totalTtc:totals.totalTTC,commercialId}} profile={profile}/>}
       </div>}
       {kind==="Devis"&&<div className="form-row"><label>Validité de l’offre<input name="due" type="date" required value={dueDate} onChange={e=>setDueDate(e.target.value)}/><small>Date d’échéance de l’offre, à côté de la livraison prévue.</small></label><label>Date prévisionnelle de livraison<input name="deliveryDate" type="date" required value={deliveryDate} onChange={e=>setDeliveryDate(e.target.value)}/><small>Remplie automatiquement 45 jours après l’édition. Vous pouvez la modifier.</small></label></div>}
       <div className="form-row"><label>TVA par défaut<select name="tax" value={tax} onChange={e=>setTax(Number(e.target.value))}><option value="20">20 %</option><option value="10">10 %</option><option value="5.5">5,5 %</option><option value="0">0 %</option></select></label><label>Statut<select name="status" value={status} onChange={e=>setStatus(e.target.value)}>{!statusOptions.includes(status)&&<option value={status}>{kind==="Devis"?quoteStatusLabel(status):status}</option>}{statusOptions.map(statusOption=><option key={statusOption} value={statusOption}>{kind==="Devis"?quoteStatusLabel(statusOption):statusOption}</option>)}</select></label></div>

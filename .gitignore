@@ -34,6 +34,9 @@ scripts/recette/lots/
 # substitut de recette ne puisse pas être déployé à la place du vrai fichier.
 ovh-site/data/
 
+# Registre local des devis signés. Ne pas versionner, ne pas déployer.
+.local/
+
 # État local du client Supabase. « linked-project.json » nomme le projet
 # auquel ce poste est rattaché : versionné, ce rattachement voyagerait avec le
 # dépôt, et une commande lancée ailleurs viserait le projet d un autre.
