@@ -1,4 +1,4 @@
-import { signatureProjectTarget } from "./commercial-sale-target.js";
+import { signatureRemoteAllowed } from "./commercial-sale-target.js";
 import {
   serviceDeleteObject,
   serviceDownloadObject,
@@ -6,8 +6,8 @@ import {
   serviceUploadObject,
 } from "./supabase-server.js";
 
-function assertRecette() {
-  if (signatureProjectTarget() !== "recette") {
+function assertRemote(write) {
+  if (!signatureRemoteAllowed(process.env, { write })) {
     throw new Error("Écriture production interdite tant que l’autorisation n’est pas donnée.");
   }
 }
@@ -41,7 +41,7 @@ function mapSale(row) {
 }
 
 export async function readRemoteSaleBook(organizationId) {
-  assertRecette();
+  assertRemote(false);
   const rows = await serviceRequest(
     `/rest/v1/devis_signatures?select=*&organization_id=eq.${encodeURIComponent(organizationId)}`
   );
@@ -67,14 +67,14 @@ export async function readRemoteSaleBook(organizationId) {
 }
 
 export async function readRemoteSalePdf(storagePath) {
-  assertRecette();
+  assertRemote(false);
   const name = objectName(storagePath);
   if (!name || name.includes("..")) return null;
   return serviceDownloadObject("devis-signatures", name);
 }
 
 export async function commitRemoteSale({ sale, action, actorId, reason = null, bytes = null }) {
-  assertRecette();
+  assertRemote(true);
   const name = objectName(sale?.storagePath);
   let uploaded = false;
   if (bytes && name && action !== "annuler") {

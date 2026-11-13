@@ -3,7 +3,7 @@ import { proofAccess, runSaleRequest, saleView } from "../../../../lib/commercia
 import { saleForDevis } from "../../../../lib/commercial-sale";
 import { readSaleBook, readSalePdf, saveSalePdf, writeSaleBook } from "../../../../lib/commercial-sale-file";
 import { loadRecordedDevis } from "../../../../lib/commercial-sale-record";
-import { commitDevisSignatureInDatabase } from "../../../../lib/commercial-sale-production";
+import { COMMERCIAL_SALE_PRODUCTION_WRITE, commitDevisSignatureInDatabase } from "../../../../lib/commercial-sale-production";
 import { readRemoteSaleBook, readRemoteSalePdf } from "../../../../lib/commercial-sale-remote";
 import { signatureAccess } from "../../../../lib/commercial-sale-target";
 
@@ -54,14 +54,22 @@ async function recordedOrResponse(id, accessToken) {
   }
 }
 
+function currentGate() {
+  return signatureAccess(process.env, { productionWrite: COMMERCIAL_SALE_PRODUCTION_WRITE === true });
+}
+
+function remoteTarget(target) {
+  return target === "recette" || target === "production";
+}
+
 async function currentBook(target, organizationId) {
-  if (target === "recette") return readRemoteSaleBook(organizationId);
+  if (remoteTarget(target)) return readRemoteSaleBook(organizationId);
   return readSaleBook();
 }
 
 export async function GET(request, { params }) {
   try {
-    const gate = signatureAccess();
+    const gate = currentGate();
     const target = gate.target;
     if (!gate.reads) return closedProject(gate);
     const auth = await requireApiSession(request);
@@ -75,7 +83,7 @@ export async function GET(request, { params }) {
       const sale = saleForDevis(book, id);
       const access = proofAccess({ profile: auth.profile, userId: auth.user.id, sale });
       if (access.status !== 200) return Response.json({ error: access.error, productionWrite: false }, { status: access.status });
-      const bytes = target === "recette" ? await readRemoteSalePdf(sale.storagePath) : await readSalePdf(sale.proofDigest);
+      const bytes = remoteTarget(target) ? await readRemoteSalePdf(sale.storagePath) : await readSalePdf(sale.proofDigest);
       if (!bytes) return Response.json({ error: "Justificatif introuvable.", productionWrite: false }, { status: 404 });
       return new Response(new Uint8Array(bytes), {
         headers: {
@@ -97,7 +105,7 @@ export async function GET(request, { params }) {
 
 export async function POST(request, { params }) {
   try {
-    const gate = signatureAccess();
+    const gate = currentGate();
     const target = gate.target;
     if (!gate.writes) return gate.reads ? readOnly() : closedProject(gate);
     const auth = await requireApiSession(request);
@@ -115,7 +123,7 @@ export async function POST(request, { params }) {
       recorded: loaded.recorded,
       body,
       book,
-      requireStatusSync: target === "recette",
+      requireStatusSync: remoteTarget(target),
       transaction: async ({ sale }) => {
         await commitDevisSignatureInDatabase({
           sale,
@@ -128,7 +136,7 @@ export async function POST(request, { params }) {
       },
     });
     if (!outcome.persist) return Response.json(outcome.body, { status: outcome.status });
-    if (target === "recette") {
+    if (remoteTarget(target)) {
       const again = await loadRecordedDevis(id, auth.accessToken);
       const fresh = await readRemoteSaleBook(again?.organizationId || loaded.recorded.organizationId);
       return Response.json({

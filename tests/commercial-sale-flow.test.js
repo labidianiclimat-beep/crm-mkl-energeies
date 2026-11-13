@@ -249,18 +249,37 @@ test("la production et la migration restent fermées", async () => {
   const recette = { NEXT_PUBLIC_SUPABASE_URL: "https://xqbjfytrssslnsxxdrou.supabase.co" };
   assert.deepEqual(signatureAccess(production), { target: "production", mode: "off", reads: false, writes: false });
   assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "actif" }).writes, false);
+  assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "actif" }).reads, false);
   assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "lecture" }).reads, false);
+  assert.equal(signatureAccess(production, { productionWrite: true }).writes, false);
+  assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "actif" }, { productionWrite: true }).writes, true);
+  assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "lecture" }, { productionWrite: true }).reads, true);
+  assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "lecture" }, { productionWrite: true }).writes, false);
+  assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "off" }, { productionWrite: true }).reads, false);
   assert.equal(signatureAccess(recette).writes, true);
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "off" }).writes, false);
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "off" }).reads, false);
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "lecture" }).writes, false);
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "lecture" }).reads, true);
   await assert.rejects(() => commitDevisSignatureInDatabase(), /Écriture production interdite/);
+  const previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const previousMode = process.env.MKL_SIGNATURE_MODULE;
+  try {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://rzkwmwtjnwnmmcexwoov.supabase.co";
+    process.env.MKL_SIGNATURE_MODULE = "actif";
+    await assert.rejects(() => commitDevisSignatureInDatabase({ sale: { devisId: "devis-test" } }), /Écriture production interdite/);
+  } finally {
+    if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl;
+    if (previousMode === undefined) delete process.env.MKL_SIGNATURE_MODULE;
+    else process.env.MKL_SIGNATURE_MODULE = previousMode;
+  }
   const route = readFileSync(new URL("../app/api/devis/[id]/signature/route.js", import.meta.url), "utf8");
   const record = readFileSync(new URL("../app/lib/commercial-sale-record.js", import.meta.url), "utf8");
   const sql = readFileSync(new URL("../supabase/migrations/20261113_devis_signatures.sql", import.meta.url), "utf8");
   const panel = readFileSync(new URL("../app/components/commercial-sale-panel.js", import.meta.url), "utf8");
   assert.match(route, /signatureAccess/);
+  assert.match(route, /COMMERCIAL_SALE_PRODUCTION_WRITE === true/);
   assert.match(route, /preuves déjà enregistrées sont conservées/);
   assert.match(route, /target === "recette"/);
   assert.match(route, /commitDevisSignatureInDatabase/);
