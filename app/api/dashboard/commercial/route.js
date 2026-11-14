@@ -10,6 +10,7 @@ import {
   contractsPlacedInPeriod,
   filterByActivity,
   filterDevisByPeriod,
+  filterVerifiedSales,
   isMaintenanceActivity,
   isOrganizationAgency,
   sumContractAmounts,
@@ -38,13 +39,20 @@ function canFilterByCommercial(profile) {
 async function loadVerifiedSales(orgId) {
   try {
     const rows = await serviceRequest(
-      `/rest/v1/devis_signatures?select=status,amount_ttc,commercial_id&organization_id=eq.${encodeURIComponent(orgId)}`
+      `/rest/v1/devis_signatures?select=status,amount_ttc,commercial_id,confirmed_at,devis_id,devis(label,client_name)&organization_id=eq.${encodeURIComponent(orgId)}`
     );
-    return (rows || []).map(row => ({
-      status: row.status,
-      amountTtc: Number(row.amount_ttc),
-      commercialId: row.commercial_id || "",
-    }));
+    return (rows || []).map(row => {
+      const devis = Array.isArray(row.devis) ? row.devis[0] : row.devis;
+      return {
+        status: row.status,
+        amountTtc: Number(row.amount_ttc),
+        commercialId: row.commercial_id || "",
+        confirmedAt: row.confirmed_at || "",
+        devisId: row.devis_id || "",
+        label: devis?.label || "",
+        client: devis?.client_name || "",
+      };
+    });
   } catch (error) {
     const message = String(error?.message || error);
     if (/devis_signatures|PGRST205|42P01|schema cache/i.test(message)) return [];
@@ -188,6 +196,7 @@ export async function GET(request) {
     } else if (!canRank) {
       verifiedSales = verifiedSales.filter(row => String(row.commercialId) === String(commercialId));
     }
+    verifiedSales = filterVerifiedSales(verifiedSales, { from, to, activity });
     const metricSales = commercialId
       ? verifiedSales.filter(row => String(row.commercialId) === String(commercialId))
       : verifiedSales;

@@ -114,6 +114,36 @@ export function filterDevisByPeriod(devis, from, to) {
   });
 }
 
+/**
+ * Ventes vérifiées retenues pour les cartes et le classement.
+ * La période est le jour civil de confirmed_at en Europe/Paris, bornes
+ * inclusives. Le brut et le net ne changent pas : ils suivent le statut
+ * actuel. Une annulation reste dans le mois de la confirmation. Une vente
+ * remplacée n'entre ni dans le brut ni dans le net ; l'avenant suit sa
+ * propre confirmation. Sans date de confirmation, la vente sort d'une
+ * période bornée et reste visible seulement sans filtre de dates.
+ * L'activité est celle du devis historique : le libellé ou le nom du client
+ * contient le filtre. Aucune famille d'article n'est déduite. La maintenance
+ * continue de lire les contrats, pas les signatures.
+ */
+export function filterVerifiedSales(sales, { from = "", to = "", activity = "" } = {}) {
+  let rows = sales || [];
+  if (from || to) {
+    rows = rows.filter(sale => {
+      const day = calendarDay(sale?.confirmedAt || sale?.confirmed_at);
+      return Boolean(day) && dayInPeriod(day, from, to);
+    });
+  }
+  if (activity && !isMaintenanceActivity(activity)) {
+    rows = rows.filter(sale => filterByActivity(
+      [{ label: sale?.label || "", client: sale?.client || "" }],
+      activity,
+      ["label", "client"],
+    ).length > 0);
+  }
+  return rows;
+}
+
 export function isMaintenanceActivity(activity) {
   return String(activity || "").trim().toLowerCase() === "maintenance";
 }

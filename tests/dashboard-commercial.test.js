@@ -6,6 +6,7 @@ import {
   computeCommercialRanking,
   contractsPlacedInPeriod,
   filterDevisByPeriod,
+  filterVerifiedSales,
   isDevisARelancer,
   isOrganizationAgency,
   sumContractAmounts,
@@ -118,6 +119,8 @@ test("le tableau de bord affiche le classement d equipe", () => {
   assert.match(page, /Rendement de l’équipe/);
   assert.match(page, /ranking-table/);
   assert.match(api, /computeCommercialRanking/);
+  assert.match(api, /filterVerifiedSales/);
+  assert.match(api, /confirmed_at/);
 });
 
 test("la période maintenance additionne les contrats placés et les visites de la semaine", () => {
@@ -160,4 +163,57 @@ test("filters devis by period", () => {
     { date: "2026-09-10", number: "B" },
   ];
   assert.equal(filterDevisByPeriod(rows, "2026-09-01", "2026-09-30").length, 1);
+});
+
+test("le CA vérifié suit la confirmation à Paris, pas la création du devis", () => {
+  const sales = [
+    { status: "confirmee", amountTtc: 12000, commercialId: "camille", confirmedAt: "2026-10-15T10:00:00.000Z", label: "Pompe à chaleur", client: "Nora" },
+    { status: "confirmee", amountTtc: 8000, commercialId: "karim", confirmedAt: "2026-11-10T10:00:00.000Z", label: "Photovoltaïque", client: "Luc" },
+    { status: "annulee", amountTtc: 4000, commercialId: "camille", confirmedAt: "2026-10-20T10:00:00.000Z", label: "Pompe à chaleur", client: "Nora" },
+    { status: "remplacee", amountTtc: 9000, commercialId: "camille", confirmedAt: "2026-09-12T10:00:00.000Z", label: "Pompe à chaleur", client: "Nora" },
+    { status: "confirmee", amountTtc: 9500, commercialId: "camille", confirmedAt: "2026-10-22T10:00:00.000Z", label: "Pompe à chaleur", client: "Nora" },
+    { status: "confirmee", amountTtc: 1500, commercialId: "", confirmedAt: "2026-10-08T10:00:00.000Z", label: "Photovoltaïque", client: "Inès" },
+    { status: "confirmee", amountTtc: 2000, commercialId: "karim", confirmedAt: "2026-10-09T10:00:00.000Z", label: "Radiateur électrique", client: "Paul" },
+    { status: "confirmee", amountTtc: 100, commercialId: "camille", confirmedAt: "2026-10-31T22:30:00.000Z", label: "Pompe à chaleur", client: "Nora" },
+    { status: "confirmee", amountTtc: 100, commercialId: "camille", confirmedAt: "2026-10-31T23:30:00.000Z", label: "Pompe à chaleur", client: "Nora" },
+    { status: "confirmee", amountTtc: 700, commercialId: "camille", confirmedAt: "", label: "Pompe à chaleur", client: "Nora" },
+    { status: "demande", amountTtc: 500, commercialId: "camille", confirmedAt: "2026-10-11T10:00:00.000Z", label: "Pompe à chaleur", client: "Nora" },
+  ];
+  const october = filterVerifiedSales(sales, { from: "2026-10-01", to: "2026-10-31" });
+  const metrics = computeCommercialDashboard({ sales: october });
+  assert.equal(metrics.caSigneNetVerifie, 25100);
+  assert.equal(metrics.caSigneBrutVerifie, 29100);
+  assert.equal(metrics.caSigneHistorique, 0);
+
+  const november = filterVerifiedSales(sales, { from: "2026-11-01", to: "2026-11-30" });
+  assert.equal(computeCommercialDashboard({ sales: november }).caSigneNetVerifie, 8100);
+
+  const pac = filterVerifiedSales(sales, { from: "2026-10-01", to: "2026-10-31", activity: "Pompe à chaleur" });
+  const pacMetrics = computeCommercialDashboard({ sales: pac });
+  assert.equal(pacMetrics.caSigneNetVerifie, 21600);
+  assert.equal(pacMetrics.caSigneBrutVerifie, 25600);
+
+  const pv = filterVerifiedSales(sales, { from: "2026-10-01", to: "2026-10-31", activity: "Photovoltaïque" });
+  assert.equal(computeCommercialDashboard({ sales: pv }).caSigneNetVerifie, 1500);
+
+  const clim = filterVerifiedSales(sales, { from: "2026-10-01", to: "2026-10-31", activity: "Climatisation" });
+  assert.equal(clim.length, 0);
+  assert.equal(filterVerifiedSales(sales, { from: "2026-12-01", to: "2026-12-31" }).length, 0);
+  assert.equal(filterVerifiedSales(sales, {}).length, sales.length);
+
+  const ranking = computeCommercialRanking({
+    commercials: [
+      { id: "camille", name: "Camille Martin", role: "Commercial" },
+      { id: "karim", name: "Karim Bennani", role: "Commercial" },
+    ],
+    sales: october,
+  });
+  const rankedNet = ranking.reduce((sum, row) => sum + row.caSigneNetVerifie, 0);
+  const rankedBrut = ranking.reduce((sum, row) => sum + row.caSigneBrutVerifie, 0);
+  assert.equal(rankedNet, metrics.caSigneNetVerifie);
+  assert.equal(rankedBrut, metrics.caSigneBrutVerifie);
+  assert.equal(ranking[0].id, "camille");
+  assert.equal(ranking[0].caSigneNetVerifie, 21600);
+  assert.equal(ranking.find(row => row.id === "karim").caSigneNetVerifie, 2000);
+  assert.equal(ranking.find(row => row.name === "Non affecté").caSigneNetVerifie, 1500);
 });
