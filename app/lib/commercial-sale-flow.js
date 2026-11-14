@@ -9,6 +9,8 @@ import {
   saleForDevis,
   saleVerdict,
 } from "./commercial-sale.js";
+import { signaturePermissions } from "./commercial-sale-pilot.js";
+import { signatureModuleMode, signaturePilotIds } from "./commercial-sale-target.js";
 
 function submittedAmount(body = {}) {
   if (body?.devis && Object.prototype.hasOwnProperty.call(body.devis, "totalTtc")) return body.devis.totalTtc;
@@ -41,10 +43,38 @@ export async function runSaleRequest({
   requireStatusSync = false,
   transaction,
   maxBytes = 4_000_000,
+  mode = signatureModuleMode(),
+  pilot = signaturePilotIds(),
 } = {}) {
   const decision = authorizeSaleAction(profile, action);
   if (!decision.ok) {
     return { status: 403, persist: false, body: { ok: false, error: decision.error, productionWrite: false } };
+  }
+  if (mode === "pilote") {
+    const rights = signaturePermissions({
+      mode,
+      profile,
+      userId: user?.id,
+      devis: recorded,
+      sale: saleForDevis(book, recorded?.id),
+      pilot,
+    });
+    const refused = (decision.action === "demande" && !rights.request)
+      || (decision.action !== "demande" && !rights.confirm);
+    const previousId = String(body.replacesDevisId || "").trim().toLowerCase();
+    const previous = (book?.sales || []).find(item => String(item.devisId || "").toLowerCase() === previousId && item.status === "confirmee");
+    const outsidePilot = decision.action === "remplacer" && (
+      !previous
+      || String(previous.commercialId || "").toLowerCase() !== pilot.commercialId
+      || String(recorded?.commercialId || "").toLowerCase() !== pilot.commercialId
+    );
+    if (refused || outsidePilot) {
+      return {
+        status: 403,
+        persist: false,
+        body: { ok: false, error: "La signature n’est pas ouverte pour ce compte.", productionWrite: false },
+      };
+    }
   }
   if (!recorded?.id) {
     return { status: 404, persist: false, body: { ok: false, error: "Devis introuvable.", productionWrite: false } };
@@ -161,29 +191,50 @@ export async function runSaleRequest({
       sync: planned.sync || null,
       verdict: saleVerdict({ devisStatus: recorded.status, sale: planned.sale }),
       journal: (planned.book.journal || []).filter(entry => entry.devisId === String(recorded.id)),
-      totals: commercialSaleTotals(planned.book.sales),
+      totals: commercialSaleTotals((planned.book.sales || []).filter(item => item.devisId === String(recorded.id))),
     },
   };
 }
 
-export function saleView({ profile, book, devisId, recorded }) {
-  const sale = saleForDevis(book, devisId);
+export function saleView({ profile, book, devisId, recorded, permissions }) {
+  const id = String(devisId || "");
+  const scoped = {
+    sales: (book?.sales || []).filter(item => String(item.devisId) === id),
+    journal: (book?.journal || []).filter(entry => String(entry.devisId) === id),
+  };
+  const sale = saleForDevis(scoped, id);
+  const rights = permissions || {
+    read: true,
+    request: canRequestCommercialSignature(profile),
+    confirm: canConfirmCommercialSale(profile),
+  };
+  if (rights.read === false) {
+    return {
+      ok: true,
+      productionWrite: false,
+      sale: null,
+      verdict: "",
+      journal: [],
+      totals: null,
+      canRequest: false,
+      canConfirm: false,
+    };
+  }
   return {
     ok: true,
     productionWrite: false,
     sale,
     verdict: saleVerdict({ devisStatus: recorded?.status || "", sale }),
-    journal: (book?.journal || []).filter(entry => entry.devisId === String(devisId)),
-    totals: commercialSaleTotals(book?.sales || []),
-    canRequest: canRequestCommercialSignature(profile),
-    canConfirm: canConfirmCommercialSale(profile),
+    journal: scoped.journal,
+    totals: commercialSaleTotals(scoped.sales),
+    canRequest: Boolean(rights.request),
+    canConfirm: Boolean(rights.confirm),
   };
 }
 
-export function proofAccess({ profile, userId, sale }) {
+export function proofAccess({ profile, userId, sale, allowed }) {
   if (!sale?.proofDigest) return { status: 404, error: "Aucun justificatif." };
-  if (!canReadSaleProof(profile, userId, sale)) {
-    return { status: 403, error: "Vous ne pouvez pas consulter ce justificatif." };
-  }
+  const permitted = allowed === undefined ? canReadSaleProof(profile, userId, sale) : allowed === true;
+  if (!permitted) return { status: 403, error: "Vous ne pouvez pas consulter ce justificatif." };
   return { status: 200 };
 }

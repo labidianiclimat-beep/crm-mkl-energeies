@@ -173,6 +173,7 @@ function snapshotSale({
   return {
     id,
     devisId: String(devis.id),
+    organizationId: String(devis.organizationId || devis.organization_id || ""),
     commercialId: String(devis.commercialId || devis.commercial_id || ""),
     amountTtc: amount,
     amountSource: "devis.total_ttc",

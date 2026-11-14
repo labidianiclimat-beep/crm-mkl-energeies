@@ -9,7 +9,7 @@ import { proofAccess, runSaleRequest, saleView } from "../app/lib/commercial-sal
 import { loadRecordedDevis, recordedDevisFromRow } from "../app/lib/commercial-sale-record.js";
 import { readSalePdf, saveSalePdf } from "../app/lib/commercial-sale-file.js";
 import { COMMERCIAL_SALE_PRODUCTION_WRITE, commitDevisSignatureInDatabase } from "../app/lib/commercial-sale-production.js";
-import { signatureAccess, signatureProjectTarget } from "../app/lib/commercial-sale-target.js";
+import { signatureAccess, signaturePilotIds, signatureProjectTarget } from "../app/lib/commercial-sale-target.js";
 
 const pdf = Buffer.from("%PDF-1.4\npreuve");
 const pdfBase64 = pdf.toString("base64");
@@ -160,7 +160,8 @@ test("le parcours dépôt, confirmation, refus, annulation et historique", async
     body: { kind: "manuel", declaredSignatureDate: date, pdfBase64: otherPdf.toString("base64") },
   });
   assert.equal(second.sale.amountTtc, 8000);
-  assert.equal(second.body.totals.net, 20000);
+  assert.equal(second.body.totals.net, 8000);
+  assert.equal(second.body.totals.brut, 8000);
 
   const missingReason = await call("annuler", responsable, second.book, { body: { reason: "ok" } });
   assert.equal(missingReason.persist, false);
@@ -170,8 +171,8 @@ test("le parcours dépôt, confirmation, refus, annulation et historique", async
   assert.equal(cancelled.sale.status, "annulee");
   assert.equal(cancelled.body.sync.devisStatus, "inchangé");
   assert.equal(cancelled.body.sync.clientStatut, "inchangé");
-  assert.equal(cancelled.body.totals.net, 8000);
-  assert.equal(cancelled.body.totals.brut, 20000);
+  assert.equal(cancelled.body.totals.net, 0);
+  assert.equal(cancelled.body.totals.brut, 12000);
 
   const view = saleView({
     profile: responsable,
@@ -182,6 +183,9 @@ test("le parcours dépôt, confirmation, refus, annulation et historique", async
   assert.deepEqual(view.journal.map(entry => entry.action), ["demande", "confirmation", "annulation"]);
   assert.match(view.journal.at(-1).reason, /rétracte/);
   assert.equal(view.verdict, "Signature annulée");
+  assert.equal(view.totals.net, 0);
+  assert.equal(view.totals.brut, 12000);
+  assert.equal(JSON.stringify(view).includes("8000"), false);
 });
 
 test("une synchronisation échouée ne confirme pas la vente", async () => {
@@ -261,6 +265,29 @@ test("la production et la migration restent fermées", async () => {
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "off" }).reads, false);
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "lecture" }).writes, false);
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "lecture" }).reads, true);
+  const commercialId = "11111111-1111-4111-8111-111111111111";
+  const managerId = "22222222-2222-4222-8222-222222222222";
+  const pilotEnv = {
+    MKL_SIGNATURE_MODULE: "pilote",
+    MKL_SIGNATURE_PILOT_COMMERCIAL_ID: commercialId,
+    MKL_SIGNATURE_PILOT_MANAGER_ID: managerId,
+  };
+  assert.equal(signatureAccess({ ...production, ...pilotEnv }).reads, false);
+  assert.equal(signatureAccess({ ...production, ...pilotEnv }).writes, false);
+  assert.equal(signatureAccess({ ...production, ...pilotEnv }, { productionWrite: true }).writes, true);
+  assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "pilote" }, { productionWrite: true }).writes, false);
+  assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "pilote" }).reads, false);
+  assert.equal(signatureAccess({ ...recette, ...pilotEnv }).writes, true);
+  assert.equal(signatureAccess({
+    ...recette,
+    ...pilotEnv,
+    MKL_SIGNATURE_PILOT_MANAGER_ID: commercialId,
+  }).writes, false);
+  assert.equal(signaturePilotIds({
+    MKL_SIGNATURE_PILOT_COMMERCIAL_ID: commercialId,
+    MKL_SIGNATURE_PILOT_MANAGER_ID: "pas-un-uuid",
+  }).valid, false);
+  assert.equal(COMMERCIAL_SALE_PRODUCTION_WRITE, false);
   await assert.rejects(() => commitDevisSignatureInDatabase(), /Écriture production interdite/);
   const previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const previousMode = process.env.MKL_SIGNATURE_MODULE;

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const original = readFileSync(new URL("../supabase/migrations/20261113_devis_signatures.sql", import.meta.url), "utf8");
 const fix = readFileSync(new URL("../supabase/migrations/20261113_devis_signatures_rls_securite.sql", import.meta.url), "utf8");
+const serverRead = readFileSync(new URL("../supabase/migrations/20261114_devis_signatures_lecture_serveur.sql", import.meta.url), "utf8");
 
 test("le correctif est distinct de la migration déjà publiée", () => {
   assert.match(original, /NON APPLIQUÉE/);
@@ -26,6 +27,18 @@ test("le correctif qualifie l’organisation et lie le pdf au devis", () => {
   assert.match(fix, /file_size_limit = 4000000/);
   assert.match(fix, /application\/pdf/);
   assert.match(fix, /public = false/);
+});
+
+test("la lecture directe des preuves est retirée aux sessions", () => {
+  assert.match(serverRead, /revoke select on table public\.devis_signatures from public, anon, authenticated/);
+  assert.match(serverRead, /revoke select on table public\.devis_signature_journal from public, anon, authenticated/);
+  assert.match(serverRead, /drop policy if exists devis_signatures_storage_select/);
+  assert.doesNotMatch(serverRead, /update public\.clients/i);
+  assert.doesNotMatch(serverRead, /update public\.devis/i);
+  assert.doesNotMatch(serverRead, /update public\.commercial_opportunities/i);
+  assert.doesNotMatch(serverRead, /update public\.commercial_appointments/i);
+  assert.doesNotMatch(serverRead, /delete from public\.devis_signatures/i);
+  assert.doesNotMatch(serverRead, /MKL_SIGNATURE_PILOT/);
 });
 
 test("le correctif ne réécrit aucune donnée commerciale", () => {

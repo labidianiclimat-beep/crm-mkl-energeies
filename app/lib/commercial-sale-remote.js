@@ -1,4 +1,4 @@
-import { signatureRemoteAllowed } from "./commercial-sale-target.js";
+import { isSignatureUuid, signatureRemoteAllowed } from "./commercial-sale-target.js";
 import {
   serviceDeleteObject,
   serviceDownloadObject,
@@ -12,8 +12,15 @@ function assertRemote(write) {
   }
 }
 
-function objectName(storagePath) {
-  return String(storagePath || "").replace(/^devis-signatures\//, "");
+export function signatureObjectName(sale, organizationId) {
+  const digest = String(sale?.proofDigest || "").trim().toLowerCase();
+  const devisId = String(sale?.devisId || "").trim().toLowerCase();
+  const org = String(organizationId || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(digest) || !isSignatureUuid(devisId) || !isSignatureUuid(org)) return null;
+  const expected = `${org}/${devisId}/${digest}.pdf`;
+  const actual = String(sale?.storagePath || "").replace(/^devis-signatures\//, "").trim().toLowerCase();
+  if (actual !== expected || actual.includes("..") || actual.includes("\\")) return null;
+  return expected;
 }
 
 function mapSale(row) {
@@ -40,15 +47,19 @@ function mapSale(row) {
   };
 }
 
-export async function readRemoteSaleBook(organizationId) {
+export async function readRemoteSaleBook(organizationId, { devisIds = [] } = {}) {
   assertRemote(false);
+  const org = String(organizationId || "").trim().toLowerCase();
+  const ids = [...new Set(devisIds.map(id => String(id || "").trim().toLowerCase()).filter(isSignatureUuid))];
+  if (!isSignatureUuid(org) || !ids.length) return { sales: [], journal: [] };
+  const list = ids.map(id => encodeURIComponent(id)).join(",");
   const rows = await serviceRequest(
-    `/rest/v1/devis_signatures?select=*&organization_id=eq.${encodeURIComponent(organizationId)}`
+    `/rest/v1/devis_signatures?select=id,idempotency_key,devis_id,commercial_id,amount_ttc,proof_kind,proof_digest,declared_signature_on,storage_path,status,link_state,prospect_id,requested_by,requested_by_name,confirmed_by,confirmed_by_name,confirmed_at,cancel_reason&organization_id=eq.${encodeURIComponent(org)}&devis_id=in.(${list})`
   );
-  const devisIds = [...new Set((rows || []).map(row => row.devis_id).filter(Boolean))];
-  const journal = devisIds.length
+  const devisIdsFound = [...new Set((rows || []).map(row => row.devis_id).filter(Boolean))];
+  const journal = devisIdsFound.length
     ? await serviceRequest(
-      `/rest/v1/devis_signature_journal?select=*&devis_id=in.(${devisIds.map(id => encodeURIComponent(id)).join(",")})&order=at.asc`
+      `/rest/v1/devis_signature_journal?select=action,at,actor_id,actor_name,devis_id,signature_id,amount_ttc,reason&devis_id=in.(${devisIdsFound.map(id => encodeURIComponent(id)).join(",")})&order=at.asc`
     )
     : [];
   return {
@@ -66,16 +77,16 @@ export async function readRemoteSaleBook(organizationId) {
   };
 }
 
-export async function readRemoteSalePdf(storagePath) {
+export async function readRemoteSalePdf(sale, organizationId) {
   assertRemote(false);
-  const name = objectName(storagePath);
-  if (!name || name.includes("..")) return null;
+  const name = signatureObjectName(sale, organizationId);
+  if (!name) return null;
   return serviceDownloadObject("devis-signatures", name);
 }
 
 export async function commitRemoteSale({ sale, action, actorId, reason = null, bytes = null }) {
   assertRemote(true);
-  const name = objectName(sale?.storagePath);
+  const name = signatureObjectName(sale, sale?.organizationId);
   let uploaded = false;
   if (bytes && name && action !== "annuler") {
     await serviceUploadObject("devis-signatures", name, bytes, "application/pdf");
