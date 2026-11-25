@@ -20,6 +20,7 @@ import { visibleProspects } from "../../lib/prospect-to-client";
 import {
   MISSING_TABLE_MESSAGE,
   PROSPECT_SELECT,
+  agendaCommentForSeller,
   formToAppointmentRecord,
   formToProspectRecord,
   isMissingCommercialTable,
@@ -149,7 +150,7 @@ export async function POST(request) {
       commercial: body.commercial,
       prospectName: record.name,
       phone: body.appointmentPhone || body.phone,
-      notes: body.appointmentNotes || body.notes,
+      notes: agendaCommentForSeller(body.notes, body.appointmentNotes),
       reminderOffsets: reminderOffsetsFromBody(body),
     }, {
       organizationId: auth.profile.organization_id,

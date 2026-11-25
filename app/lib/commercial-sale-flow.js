@@ -32,6 +32,12 @@ function pdfBytes(body = {}, maxBytes) {
  * requireStatusSync n’est vrai que pour le projet de recette.
  * Une transaction qui échoue laisse le registre inchangé.
  */
+function saleActorReady(profile) {
+  if (!profile || profile.active === false) return false;
+  if (Object.prototype.hasOwnProperty.call(profile, "onboarding_completed_at") && !profile.onboarding_completed_at) return false;
+  return true;
+}
+
 export async function runSaleRequest({
   profile,
   user,
@@ -45,20 +51,40 @@ export async function runSaleRequest({
   maxBytes = 4_000_000,
   mode = signatureModuleMode(),
   pilot = signaturePilotIds(),
+  pilotManagerByRole,
 } = {}) {
-  const decision = authorizeSaleAction(profile, action);
+  if (!saleActorReady(profile)) {
+    return { status: 403, persist: false, body: { ok: false, error: "Compte inactif.", productionWrite: false } };
+  }
+  const rights = signaturePermissions({
+    mode,
+    profile,
+    userId: user?.id,
+    devis: recorded,
+    sale: saleForDevis(book, recorded?.id),
+    pilot,
+    ...(pilotManagerByRole === undefined ? {} : { pilotManagerByRole }),
+  });
+  const decision = mode === "pilote"
+    ? (rights.request && action === "demande") || (rights.confirm && ["confirmer", "annuler", "remplacer"].includes(String(action || "").trim()))
+      ? { ok: true, action: String(action || "").trim() }
+      : { ok: false, error: "La signature n’est pas ouverte pour ce compte." }
+    : authorizeSaleAction(profile, action);
   if (!decision.ok) {
     return { status: 403, persist: false, body: { ok: false, error: decision.error, productionWrite: false } };
   }
+  if (decision.action === "demande") {
+    const owner = String(recorded?.commercialId || recorded?.commercial_id || "").trim().toLowerCase();
+    const actorId = String(user?.id || "").trim().toLowerCase();
+    if (!owner || owner !== actorId) {
+      return {
+        status: 403,
+        persist: false,
+        body: { ok: false, error: "Vous ne pouvez déposer une preuve que pour un devis dont vous êtes responsable.", productionWrite: false },
+      };
+    }
+  }
   if (mode === "pilote") {
-    const rights = signaturePermissions({
-      mode,
-      profile,
-      userId: user?.id,
-      devis: recorded,
-      sale: saleForDevis(book, recorded?.id),
-      pilot,
-    });
     const refused = (decision.action === "demande" && !rights.request)
       || (decision.action !== "demande" && !rights.confirm);
     const previousId = String(body.replacesDevisId || "").trim().toLowerCase();
@@ -108,7 +134,16 @@ export async function runSaleRequest({
 
   const planned = executeSaleAction(book, {
     action: decision.action,
-    actor: { id: user?.id, role: profile?.role, name: profile?.full_name || profile?.email || "" },
+    actor: {
+      id: user?.id,
+      role: profile?.role,
+      name: profile?.full_name || profile?.email || "",
+      actions: profile?.actions,
+      modules: profile?.modules,
+      ...(profile && Object.prototype.hasOwnProperty.call(profile, "active") ? { active: profile.active } : {}),
+      ...(profile && Object.prototype.hasOwnProperty.call(profile, "onboarding_completed_at") ? { onboarding_completed_at: profile.onboarding_completed_at } : {}),
+      ...(mode === "pilote" ? { saleAuthorized: true } : {}),
+    },
     devis,
     proof,
     reason: body.reason,

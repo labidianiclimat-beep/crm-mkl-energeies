@@ -140,6 +140,18 @@ export function originViewOf(prospect = {}, touches = []) {
   };
 }
 
+/** Provenance lisible sur la carte du rendez-vous. */
+export function agendaProvenance(prospect) {
+  if (!prospect) return "";
+  const source = text(prospect.source);
+  if (source && source.toLowerCase() !== "google") return source;
+  const origin = prospect.origin || originViewOf(prospect);
+  const label = text(origin?.label);
+  const sub = text(origin?.sublabel);
+  if (!label || label === "À qualifier") return "";
+  return sub ? `${label} · ${sub}` : label;
+}
+
 /** Filtre de liste. `all` et une valeur vide laissent tout passer. */
 export function matchesOriginFilter(prospect, value) {
   const wanted = text(value);

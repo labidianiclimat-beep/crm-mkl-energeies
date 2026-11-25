@@ -1,6 +1,7 @@
 /** Tableau RDV commerciaux — lecture des rendez-vous déjà en agenda, sans doublon. */
 
 import { appointmentEnd, isPersonalAgendaKind, parseAgendaDate } from "./agenda.js";
+import { agendaProvenance } from "./prospect-origin-view.js";
 import { extraOf } from "./prospects.js";
 import {
   ICOLL_RDV_STATUSES,
@@ -105,6 +106,7 @@ export function enrichCommercialRdvRow(item = {}, prospect) {
   const city = item.city || prospect?.city || "";
   const phone = item.phone || extra.phone || extra.telephone || prospect?.phone || "";
   const status = normalizeAgendaStatus(item.status);
+  const originLabel = agendaProvenance(prospect);
   const start = parseAgendaDate(item.start || item.starts_at);
   const end = appointmentEnd(item) || start;
   return {
@@ -116,6 +118,7 @@ export function enrichCommercialRdvRow(item = {}, prospect) {
     partyType: rdvPartyType(item, prospect),
     prospector: prospect?.prospector || extra.prospector || "",
     prospectorId: prospect?.prospectorId || extra.prospectorId || "",
+    originLabel,
     calendar: item.commercial || "—",
     dateLabel: formatRdvDate(start),
     startLabel: formatRdvClock(start),
@@ -127,6 +130,7 @@ export function enrichCommercialRdvRow(item = {}, prospect) {
       phone,
       item.commercial,
       prospect?.prospector || extra.prospector,
+      originLabel,
       status,
       item.appointmentType,
       item.kind,

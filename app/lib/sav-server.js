@@ -18,8 +18,8 @@ import {
   validateCreateInput,
 } from "./sav.js";
 
-const LIST_SELECT = "id,organization_id,number,client_id,subject,category,priority,channel,status,owner_id,created_by,due_at,opened_at,next_action,created_at,updated_at";
-const DETAIL_SELECT = `${LIST_SELECT},caller_name,caller_phone,description,opened_by,accepted_at,accepted_by,scheduled_at,intervened_at,next_action_at,wait_reason,wait_for,wait_until,block_reason,result_comment,reviewed_by,reviewed_at,client_informed,client_informed_at,resolved_at,closed_at,cancelled_at,reopen_count`;
+const LIST_SELECT = "id,organization_id,number,client_id,subject,category,priority,channel,status,owner_id,created_by,due_at,opened_at,scheduled_at,to_invoice,to_invoice_at,next_action,created_at,updated_at";
+const DETAIL_SELECT = `${LIST_SELECT},caller_name,caller_phone,description,opened_by,accepted_at,accepted_by,intervened_at,next_action_at,wait_reason,wait_for,wait_until,block_reason,result_comment,reviewed_by,reviewed_at,client_informed,client_informed_at,resolved_at,closed_at,cancelled_at,reopen_count`;
 
 export const MISSING_SAV_MESSAGE = "Le SAV n’est pas encore activé. Collez le script supabase/migrations/20261003_sav.sql dans Supabase, puis rechargez.";
 
@@ -107,6 +107,8 @@ function presentCase(row, names, clients, now) {
     reviewedAt: row.reviewed_at || null,
     clientInformed: Boolean(row.client_informed),
     clientInformedAt: row.client_informed_at || null,
+    toInvoice: Boolean(row.to_invoice),
+    toInvoiceAt: row.to_invoice_at || null,
     scheduledAt: row.scheduled_at || null,
     waitReason: row.wait_reason || "",
     waitFor: row.wait_for || "",

@@ -22,11 +22,13 @@ import {
   verifyElectronicSignature,
 } from "../app/lib/commercial-sale.js";
 import { readSaleBook, saveSalePdf, writeSaleBook } from "../app/lib/commercial-sale-file.js";
+import { computeCommercialDashboard } from "../app/lib/dashboard-commercial.js";
 
 const now = new Date("2026-11-13T12:00:00.000Z").getTime();
 const pdf = Buffer.from("%PDF-1.4\npreuve");
 const commercial = { id: "commercial-1", role: "Commercial" };
 const responsable = { id: "resp-1", role: "Responsable commercial" };
+const responsableAutorise = { ...responsable, actions: ["action:validate_signed_quote"] };
 const admin = { id: "admin-1", role: "Administrateur" };
 const superadmin = { id: "super-1", role: "Super admin" };
 const direction = { id: "dir-1", role: "Direction" };
@@ -46,8 +48,12 @@ function devis(extra = {}) {
 test("la confirmation est un droit distinct du statut des devis", () => {
   assert.equal(canConfirmCommercialSale(superadmin), true);
   assert.equal(canConfirmCommercialSale(admin), true);
-  assert.equal(canConfirmCommercialSale(responsable), true);
+  assert.equal(canConfirmCommercialSale(responsable), false);
+  assert.equal(canConfirmCommercialSale(responsableAutorise), true);
+  assert.equal(canConfirmCommercialSale({ ...commercial, actions: ["action:validate_signed_quote"] }), true);
   assert.equal(canConfirmCommercialSale(commercial), false);
+  assert.equal(canConfirmCommercialSale({ ...superadmin, active: false }), false);
+  assert.equal(canConfirmCommercialSale({ ...responsableAutorise, active: false }), false);
   assert.equal(canConfirmCommercialSale(direction), false);
   assert.equal(canRequestCommercialSignature(commercial), true);
   assert.equal(canRequestCommercialSignature(responsable), false);
@@ -56,6 +62,25 @@ test("la confirmation est un droit distinct du statut des devis", () => {
   assert.equal(authorizeSaleAction(direction, "demande").ok, false);
   assert.equal(authorizeSaleAction(admin, "confirmer").ok, true);
   assert.equal(legacyAcceptedQuoteCountsAsSale({ status: "Accepté" }), false);
+});
+
+test("vingt-et-un devis acceptés historiques ne créent aucune vente vérifiée", () => {
+  const devisHistoriques = Array.from({ length: 21 }, (_, index) => ({
+    id: `historique-${index + 1}`,
+    kind: "Devis",
+    status: "Accepté",
+    totalTTC: 100,
+    date: "2026-10-01",
+  }));
+  const metrics = computeCommercialDashboard({ devis: devisHistoriques, sales: [] });
+  assert.equal(metrics.devisAcceptesCount, 21);
+  assert.equal(metrics.caSigneHistorique, 2100);
+  assert.equal(metrics.caSigneBrutVerifie, 0);
+  assert.equal(metrics.caSigneNetVerifie, 0);
+  assert.equal(commercialSaleTotals([]).brut, 0);
+  assert.equal(commercialSaleTotals([]).net, 0);
+  assert.equal(legacyAcceptedQuoteCountsAsSale(), false);
+  assert.equal(saleVerdict({ devisStatus: "Accepté", sale: null }), "Acceptation historique non vérifiée");
 });
 
 test("la signature du commercial et un rendez-vous ne prouvent pas la vente", () => {
@@ -88,7 +113,16 @@ test("un commercial dépose, un responsable confirme, la fiche et le rendez-vous
   assert.equal(asked.sale.storagePath.startsWith("devis-signatures/"), true);
   assert.equal(asked.sale.storagePath.includes("http"), false);
 
-  const signed = confirmCommercialSale(asked.book, { actor: responsable, devis: devis(), now });
+  const refused = confirmCommercialSale(asked.book, { actor: responsable, devis: devis(), now });
+  assert.equal(refused.ok, false);
+  const otherDevis = requestCommercialSignature(emptySaleBook(), {
+    actor: { id: "commercial-2", role: "Commercial" },
+    devis: devis(),
+    proof: { kind: "devis_signe", declaredSignatureDate: "2026-11-12", bytes: pdf },
+    now,
+  });
+  assert.equal(otherDevis.ok, false);
+  const signed = confirmCommercialSale(asked.book, { actor: responsableAutorise, devis: devis(), now });
   assert.equal(signed.ok, true);
   assert.equal(signed.sale.status, "confirmee");
   assert.equal(signed.sale.confirmedBy, "resp-1");
@@ -134,13 +168,13 @@ test("la même preuve ne confirme pas deux fois, l’annulation sépare le brut 
 
 test("un devis remplacé sort des deux chiffres", () => {
   const first = confirmCommercialSale(emptySaleBook(), {
-    actor: responsable,
+    actor: responsableAutorise,
     devis: devis(),
     proof: { kind: "manuel", declaredSignatureDate: "2026-11-01", bytes: pdf },
     now,
   });
   const next = replaceCommercialSale(first.book, {
-    actor: responsable,
+    actor: responsableAutorise,
     devis: devis({ id: "devis-2", totalTtc: 15000 }),
     replacesDevisId: "devis-1",
     proof: { kind: "manuel", declaredSignatureDate: "2026-11-13", bytes: Buffer.from("%PDF-1.4\navenant") },
@@ -150,7 +184,7 @@ test("un devis remplacé sort des deux chiffres", () => {
   assert.equal(next.replaced.status, "remplacee");
   assert.deepEqual(commercialSaleTotals(next.book.sales), { brut: 15000, net: 15000 });
   const revived = confirmCommercialSale(next.book, {
-    actor: responsable,
+    actor: responsableAutorise,
     devis: devis(),
     proof: { kind: "manuel", declaredSignatureDate: "2026-11-13", bytes: Buffer.from("%PDF-1.4\nancien") },
     now,
@@ -158,7 +192,7 @@ test("un devis remplacé sort des deux chiffres", () => {
   assert.equal(revived.ok, false);
   assert.deepEqual(commercialSaleTotals(next.book.sales), { brut: 15000, net: 15000 });
   const duplicate = replaceCommercialSale(next.book, {
-    actor: responsable,
+    actor: responsableAutorise,
     devis: devis({ id: "devis-2", totalTtc: 15000 }),
     replacesDevisId: "devis-1",
     proof: { kind: "manuel", declaredSignatureDate: "2026-11-13", bytes: Buffer.from("%PDF-1.4\navenant") },
@@ -247,7 +281,9 @@ test("la route et la migration n’écrivent rien en production", () => {
   assert.match(route, /commitDevisSignatureInDatabase/);
   assert.doesNotMatch(route, /rzkwmwtjnwnmmcexwoov/);
   assert.match(migration, /NON APPLIQUÉE/);
-  assert.match(panel, /Déposer un devis signé/);
+  assert.match(panel, /Soumettre à la validation/);
+  assert.doesNotMatch(panel, /Superadmin/);
+  assert.doesNotMatch(panel, /type="file"/);
   assert.match(panel, /Confirmer la vente/);
   assert.doesNotMatch(source, /serviceRequest|gclid|google_ads/);
 });

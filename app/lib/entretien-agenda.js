@@ -242,6 +242,13 @@ function reportInterventionDay(report) {
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "";
 }
 
+function reportPaymentMark(value) {
+  const text = foldContractText(value);
+  if (text === "paye" || text === "regle") return "paid";
+  if (text === "pas paye" || text === "non paye" || text === "impaye") return "unpaid";
+  return "";
+}
+
 function contractAmount(value) {
   if (value === null || value === undefined || value === "") return null;
   const amount = Number(value);
@@ -319,6 +326,7 @@ export function maintenanceReportBoards(reports = [], contracts = [], { weekStar
       technician: String(report?.technician || "").trim(),
       contract,
       amount,
+      payment: reportPaymentMark(report?.payment),
       contractKey: foldContractText(contract) || clientId || foldContractText(client) || String(report?.id || ""),
     };
   }).filter(row => row.day);

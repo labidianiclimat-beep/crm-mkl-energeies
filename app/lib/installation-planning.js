@@ -46,18 +46,51 @@ export const INSTALLATION_CHECK_STATES = ["non", "pb", "oui"];
 
 export function canEditInstallation(role) {
   const label = normalizeRoleLabel(role);
-  return label === "Secrétariat" || label === "Superadmin" || label === "Admin VIP";
+  return label === "Secrétariat" || label === "Responsable technique" || label === "Superadmin" || label === "Admin VIP";
 }
 
 export function installationCheckValue(item, id) {
   const value = item?.checks?.[id];
-  if (value === true || value === "oui" || value === "Oui") return "oui";
-  if (value === "pb" || value === "PB") return "pb";
+  const raw = value && typeof value === "object" ? value.state : value;
+  if (raw === true || raw === "oui" || raw === "Oui") return "oui";
+  if (raw === "pb" || raw === "PB") return "pb";
   return "non";
+}
+
+export function personInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(part => part && !/^(de|du|des|d|le|la|von|van)$/i.test(part));
+  if (!parts.length) return "";
+  const letters = parts.length === 1 ? parts[0].slice(0, 2) : `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`;
+  return letters.toLocaleUpperCase("fr-FR").normalize("NFD").replace(/\p{M}/gu, "");
+}
+
+export function installationCheckStamp(item, id) {
+  const value = item?.checks?.[id];
+  if (!value || typeof value !== "object") return { initials: "", by: "" };
+  return {
+    initials: String(value.initials || "").trim().slice(0, 3),
+    by: String(value.by || "").trim(),
+  };
 }
 
 export function installationCheckReady(item, id) {
   return installationCheckValue(item, id) === "oui";
+}
+
+export function installationChecksComplete(item) {
+  return INSTALLATION_CHECKS.every(check => installationCheckValue(item, check.id) === "oui");
+}
+
+/** Chantier non terminé, dans les 7 jours, dont une pastille n'est pas verte. */
+export function installationAlertsWithinWeek(item, todayIso) {
+  if (!item || isFinishedInstallation(item) || installationChecksComplete(item)) return false;
+  const day = installationDay(item);
+  const today = String(todayIso || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return false;
+  return day >= today && day <= addDaysIso(today, 7);
 }
 
 export function installationCheckLabel(value) {
@@ -66,10 +99,19 @@ export function installationCheckLabel(value) {
   return "Non";
 }
 
-export function installationChecksFromForm(input = {}) {
+export function installationChecksFromForm(input = {}, { previous = {}, actorName = "" } = {}) {
+  const initials = personInitials(actorName);
+  const by = String(actorName || "").trim();
   return Object.fromEntries(INSTALLATION_CHECKS.map(check => {
     const raw = String(input[`check_${check.id}`] || "").trim().toLowerCase();
     const value = raw === "oui" ? "oui" : raw === "pb" ? "pb" : "non";
+    const before = installationCheckValue({ checks: previous }, check.id);
+    const stamp = installationCheckStamp({ checks: previous }, check.id);
+    if (value === "oui") {
+      if (before === "oui" && stamp.initials) return [check.id, { state: "oui", initials: stamp.initials, by: stamp.by }];
+      if (before !== "oui" && initials) return [check.id, { state: "oui", initials, by }];
+      return [check.id, "oui"];
+    }
     return [check.id, value];
   }));
 }
@@ -89,6 +131,15 @@ export function installationTeamsEmbedFiles(teams) {
 
 export function contractorDocumentCount(documents = {}) {
   return SUBCONTRACTOR_DOCUMENTS.filter(item => contractorDocumentReady(documents?.[item.id])).length;
+}
+
+/** Le chantier le plus récent (date de début, puis création) passe devant. */
+export function compareInstallationsRecent(a, b) {
+  const start = String(b?.start || "").localeCompare(String(a?.start || ""));
+  if (start) return start;
+  const created = String(b?.created || "").localeCompare(String(a?.created || ""));
+  if (created) return created;
+  return String(b?.id || "").localeCompare(String(a?.id || ""));
 }
 
 export function installationDay(item) {
@@ -162,7 +213,7 @@ export function installationBoards(installations = [], contractors = [], anchor)
         day,
         items: group.items
           .filter(item => installationDay(item) === day)
-          .sort((a, b) => String(a.start).localeCompare(String(b.start))),
+          .sort(compareInstallationsRecent),
       })),
     }))
     .sort((a, b) => a.name.localeCompare(b.name, "fr"));

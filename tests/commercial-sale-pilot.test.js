@@ -4,6 +4,7 @@ import { emptySaleBook } from "../app/lib/commercial-sale.js";
 import { runSaleRequest, saleView } from "../app/lib/commercial-sale-flow.js";
 import { sameSignatureOrganization, signatureActorIdentity, signaturePermissions } from "../app/lib/commercial-sale-pilot.js";
 import { signatureObjectName } from "../app/lib/commercial-sale-remote.js";
+import { signaturePilotIds } from "../app/lib/commercial-sale-target.js";
 
 const pdf = Buffer.from("%PDF-1.4\npreuve-pilote");
 const date = "2026-11-13";
@@ -74,13 +75,16 @@ test("le pilote ignore l’identité annoncée par le navigateur", async () => {
   });
   assert.equal(preview.userId, admin.id);
   assert.equal(preview.profile.role, "Admin VIP");
-  assert.equal(signaturePermissions({
+  const oversight = signaturePermissions({
     mode,
     profile: preview.profile,
     userId: preview.userId,
     devis: recorded(),
     pilot,
-  }).read, false);
+  });
+  assert.equal(oversight.read, true);
+  assert.equal(oversight.confirm, true);
+  assert.equal(oversight.request, false);
 });
 
 test("seul le couple pilote agit, et seulement sur les devis du commercial pilote", async () => {
@@ -92,7 +96,7 @@ test("seul le couple pilote agit, et seulement sur les devis du commercial pilot
   assert.equal(deposit.sale.amountTtc, 12000);
   assert.equal(deposit.body.sync.devisStatus, "inchangé");
 
-  for (const actor of [commercial, otherCommercial, otherManager, admin, superadmin, direction]) {
+  for (const actor of [commercial, otherCommercial, otherManager, direction]) {
     const confirm = await call("confirmer", actor, deposit.book);
     assert.equal(confirm.persist, false, actor.role);
   }
@@ -133,11 +137,10 @@ test("seul le couple pilote agit, et seulement sur les devis du commercial pilot
     recorded: recorded({ status: "Accepté" }),
     permissions: signaturePermissions({ mode, profile: admin, userId: admin.id, devis: recorded(), sale: confirmed.sale, pilot }),
   });
-  assert.equal(hidden.sale, null);
-  assert.equal(hidden.journal.length, 0);
-  assert.equal(hidden.totals, null);
+  assert.equal(hidden.sale.amountTtc, 12000);
+  assert.equal(hidden.canConfirm, true);
+  assert.equal(hidden.canRequest, false);
   assert.equal(JSON.stringify(hidden).includes("99999"), false);
-  assert.equal(JSON.stringify(hidden).includes("12000"), false);
 
   const visible = saleView({
     profile: manager,
@@ -149,6 +152,26 @@ test("seul le couple pilote agit, et seulement sur les devis du commercial pilot
   assert.equal(visible.sale.amountTtc, 12000);
   assert.equal(visible.canConfirm, true);
   assert.equal(visible.canRequest, false);
+});
+
+test("le Superadmin et l’Admin VIP approuvent le devis du commercial pilote", async () => {
+  for (const actor of [admin, superadmin]) {
+    const deposit = await call("demande", commercial, emptySaleBook(), {
+      body: { kind: "devis_signe", declaredSignatureDate: date, pdfBase64: pdf.toString("base64") },
+    });
+    const confirmed = await call("confirmer", actor, deposit.book);
+    assert.equal(confirmed.status, 200, actor.role);
+    assert.equal(confirmed.sale.status, "confirmee");
+    assert.equal(confirmed.sale.confirmedBy, actor.id);
+    assert.equal(confirmed.body.sync.appointment, "inchangé");
+    assert.equal(confirmed.body.sync.clientStatut, "inchangé");
+    assert.equal(confirmed.sale.amountSource, "devis.total_ttc");
+    const outside = await call("confirmer", actor, emptySaleBook(), {
+      recorded: recorded({ id: "devis-hors-pilote", commercialId: otherCommercialId }),
+    });
+    assert.equal(outside.status, 403, actor.role);
+    assert.equal(outside.persist, false);
+  }
 });
 
 test("une autre organisation et un chemin de fichier indirect sont refusés", () => {
@@ -170,4 +193,108 @@ test("une autre organisation et un chemin de fichier indirect sont refusés", ()
   assert.equal(signatureObjectName(safe, org), `${org}/${commercialId}/${digest}.pdf`);
   assert.equal(signatureObjectName({ ...safe, storagePath: `devis-signatures/${org}/${commercialId}/../secret.pdf` }, org), null);
   assert.equal(signatureObjectName({ ...safe, storagePath: `devis-signatures/autre-org/${commercialId}/${digest}.pdf` }, org), null);
+});
+
+const pfalzgrafId = "b8230f67-2bc0-4a9b-b569-3f824c299b84";
+const elOuariachiId = "f9562652-1ad4-40b5-9c55-318a83ef0476";
+const mkl = "00000000-0000-0000-0000-000000000001";
+const comptesPilotes = {
+  valid: true,
+  commercialId: pfalzgrafId,
+  managerId: elOuariachiId,
+};
+const pfalzgraf = { id: pfalzgrafId, role: "Commercial", full_name: "Byron PFALZGRAF", organization_id: mkl };
+const elOuariachi = { id: elOuariachiId, role: "Responsable commercial", full_name: "Ouahib EL OUARIACHI", organization_id: mkl };
+
+test("seuls PFALZGRAF et EL OUARIACHI agissent, et les UUID du client sont ignorés", async () => {
+  assert.deepEqual(signaturePilotIds({
+    MKL_SIGNATURE_PILOT_COMMERCIAL_ID: pfalzgrafId.toUpperCase(),
+    MKL_SIGNATURE_PILOT_MANAGER_ID: ` ${elOuariachiId} `,
+    body: { MKL_SIGNATURE_PILOT_COMMERCIAL_ID: otherCommercialId, userId: elOuariachiId },
+  }), comptesPilotes);
+
+  const devisPfalzgraf = recorded({
+    id: "devis-pfalzgraf",
+    organizationId: mkl,
+    commercialId: pfalzgrafId,
+    totalTtc: 4800,
+  });
+  const demande = {
+    kind: "devis_signe",
+    declaredSignatureDate: date,
+    pdfBase64: pdf.toString("base64"),
+    MKL_SIGNATURE_PILOT_COMMERCIAL_ID: otherCommercialId,
+    MKL_SIGNATURE_PILOT_MANAGER_ID: otherManagerId,
+    userId: elOuariachiId,
+    actorId: elOuariachiId,
+  };
+  const depot = await runSaleRequest({
+    profile: pfalzgraf,
+    user: { id: pfalzgraf.id },
+    action: "demande",
+    recorded: devisPfalzgraf,
+    body: demande,
+    book: emptySaleBook(),
+    now: new Date("2026-11-13T12:00:00.000Z").getTime(),
+    mode,
+    pilot: comptesPilotes,
+    requireStatusSync: true,
+    transaction: async () => ({ ok: true }),
+  });
+  assert.equal(depot.status, 200);
+  assert.equal(depot.persist, true);
+  assert.equal(depot.sale.commercialId, pfalzgrafId);
+  assert.equal(depot.body.sync.devisStatus, "inchangé");
+
+  const devisAutre = recorded({ id: "devis-autre-commercial", organizationId: mkl, commercialId: otherCommercialId });
+  for (const [actor, action, cible] of [
+    [pfalzgraf, "demande", devisAutre],
+    [pfalzgraf, "confirmer", devisPfalzgraf],
+    [elOuariachi, "demande", devisPfalzgraf],
+    [otherCommercial, "demande", devisAutre],
+    [otherManager, "confirmer", devisPfalzgraf],
+    [direction, "demande", devisPfalzgraf],
+  ]) {
+    let invoked = 0;
+    const refused = await runSaleRequest({
+      profile: actor,
+      user: { id: actor.id },
+      action,
+      recorded: cible,
+      body: demande,
+      book: depot.book,
+      now: new Date("2026-11-13T12:00:00.000Z").getTime(),
+      mode,
+      pilot: comptesPilotes,
+      requireStatusSync: true,
+      transaction: async () => {
+        invoked += 1;
+        return { ok: true };
+      },
+    });
+    assert.equal(refused.status, 403, `${actor.full_name} ${action}`);
+    assert.equal(refused.persist, false);
+    assert.equal(invoked, 0, `${actor.full_name} ${action}`);
+  }
+
+  const confirmation = await runSaleRequest({
+    profile: elOuariachi,
+    user: { id: elOuariachi.id },
+    action: "confirmer",
+    recorded: devisPfalzgraf,
+    body: { ...demande, userId: pfalzgrafId, actorId: otherManagerId },
+    book: depot.book,
+    now: new Date("2026-11-13T12:00:00.000Z").getTime(),
+    mode,
+    pilot: comptesPilotes,
+    requireStatusSync: true,
+    transaction: async ({ sale }) => {
+      assert.equal(sale.commercialId, pfalzgrafId);
+      return { ok: true };
+    },
+  });
+  assert.equal(confirmation.status, 200);
+  assert.equal(confirmation.sale.status, "confirmee");
+  assert.equal(confirmation.sale.confirmedBy, elOuariachiId);
+  assert.equal(confirmation.body.sync.devisStatus, "Accepté");
 });

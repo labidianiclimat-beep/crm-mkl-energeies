@@ -164,6 +164,11 @@ test("les neuf provenances historiques sont toutes rattachées", () => {
   assert.equal(legacySourceToOrigin("Stand Carrefour").subtype, "stand");
   assert.equal(legacySourceToOrigin("Call Marrakech (Pros)").subtype, "centre_appels");
   assert.equal(legacySourceToOrigin("Autre").category, "a_qualifier");
+  assert.equal(legacySourceToOrigin("Contact Google").category, "entrant");
+  assert.equal(legacySourceToOrigin("Contact Meta").category, "entrant");
+  assert.equal(legacySourceToOrigin("Contact Effy").category, "entrant");
+  assert.notEqual(legacySourceToOrigin("Contact Google").category, "google_ads");
+  assert.notEqual(legacySourceToOrigin("Contact Meta").category, "meta_ads");
 });
 
 test("« Site internet » historique reste ambigu et jamais publicitaire", () => {

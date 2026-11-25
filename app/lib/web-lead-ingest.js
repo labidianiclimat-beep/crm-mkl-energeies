@@ -95,6 +95,8 @@ export function parseWebLeadPayload(raw) {
         ? data.attributionFirst
         : {},
   };
+  const source = text(data.source, 80);
+  if (source) value.source = source;
 
   if (kind === "appointment") {
     value.date = text(data.date, 20);

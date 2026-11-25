@@ -26,6 +26,8 @@ export const ACCESS_MODULES = [
   "Utilisateurs",
 ];
 
+export const SIGNED_QUOTE_VALIDATION = "action:validate_signed_quote";
+
 export const ACTION_PERMISSIONS = [
   { code: "action:backup", label: "Sauvegarde complète" },
   { code: "action:export_clients", label: "Exporter les clients" },
@@ -36,6 +38,7 @@ export const ACTION_PERMISSIONS = [
   { code: "action:delete_prospects", label: "Supprimer des prospects" },
   { code: "action:view_all_clients", label: "Voir tous les clients" },
   { code: "action:send_mail", label: "Envoyer des emails" },
+  { code: "action:validate_signed_quote", label: "Valider les devis signés" },
   { code: "action:dispatch_prospects", label: "Attribuer des prospects" },
   { code: "action:delete_articles", label: "Supprimer des articles", exclusive: true },
   { code: "action:manage_fleet", label: "Gérer le parc automobile" },
@@ -393,6 +396,12 @@ export function assertAssignableAccess({
       return { ok: false, error: "Seul l’Admin VIP peut accorder une fonction exclusive." };
     }
   }
+  const actorIsAdmin = actorIsVip || normalizeRoleLabel(actorRole) === "Superadmin";
+  const hadSignedQuote = extractGrantedActions(existingActions).includes(SIGNED_QUOTE_VALIDATION);
+  const willSignQuote = extractGrantedActions(nextActions).includes(SIGNED_QUOTE_VALIDATION);
+  if (hadSignedQuote !== willSignQuote && !actorIsAdmin) {
+    return { ok: false, error: "Seul un Superadmin ou un Admin VIP peut modifier la validation des devis signés." };
+  }
   return { ok: true };
 }
 
@@ -417,6 +426,16 @@ export function persistProfileAccess({ modules, actions, role, existingModules, 
   let nextActions = actions !== undefined
     ? extractGrantedActions(actions)
     : extractGrantedActions(modules ?? existingModules);
+  if (actions === undefined && extractGrantedActions(existingModules).includes(SIGNED_QUOTE_VALIDATION) && !nextActions.includes(SIGNED_QUOTE_VALIDATION)) {
+    nextActions = [...nextActions, SIGNED_QUOTE_VALIDATION];
+  }
+  const actorIsAdmin = isAdminVipRole(actorRole) || normalizeRoleLabel(actorRole) === "Superadmin";
+  if (!actorIsAdmin) {
+    const hadSignedQuote = extractGrantedActions(existingModules).includes(SIGNED_QUOTE_VALIDATION);
+    nextActions = hadSignedQuote
+      ? [...nextActions.filter(code => code !== SIGNED_QUOTE_VALIDATION), SIGNED_QUOTE_VALIDATION]
+      : nextActions.filter(code => code !== SIGNED_QUOTE_VALIDATION);
+  }
   if (!isAdminVipRole(actorRole)) {
     const exclusive = new Set(exclusiveActionCodes());
     const keep = new Set(extractGrantedActions(existingModules));

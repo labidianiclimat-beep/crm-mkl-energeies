@@ -36,7 +36,8 @@ import { formatProspectNumber } from "../lib/prospect-number";
 import { documentDateLabel, documentsForRecord } from "../lib/record-documents";
 import AddressCallNotice, { dialPhone } from "./address-call-notice";
 import { missingAddressParts } from "../lib/address";
-import { allowedRdvStatusesFor, canStatuerAppointment, displayRdvStatus, rdvStatuerHint, rdvStatusTone } from "../lib/appointment-status";
+import { allowedRdvStatusesFor, canStatuerAppointment, normalizeAgendaStatus, rdvStatuerHint, rdvStatusTone } from "../lib/appointment-status";
+import { dossierStep, isUnstatedVisit, rdvJourneyLabel } from "../lib/dossier-step";
 import { appointmentsForClient, formatRdvClock, formatRdvDate } from "../lib/commercial-rdv-table";
 
 const euro = value =>
@@ -142,8 +143,10 @@ export default function ClientRecord({
   const [rdvError, setRdvError] = useState("");
   const [previsitDate, setPrevisitDate] = useState("");
   const clientAppointments = appointmentsForClient(client, appointments, prospects);
-
   const quotes = billing.filter(doc => sameClientRecord(doc, client) && (doc.kind || "Devis") === "Devis");
+  const invoices = billing.filter(doc => sameClientRecord(doc, client) && doc.kind === "Facture");
+  const clientJobs = installations.filter(item => String(item.clientId || "") === String(client.id || ""));
+  const step = dossierStep({ appointments: clientAppointments, quotes, invoices, installations: clientJobs });
   const financedQuotes = quotes.filter(hasQuoteFinancing);
   const clientVisits = visits.filter(visit => sameClientRecord(visit, client));
   const visit = scheduledPrevisit(clientVisits);
@@ -210,6 +213,7 @@ export default function ClientRecord({
             <small>FICHE CLIENT{formatClientNumber(client.clientNumber) ? ` · ${formatClientNumber(client.clientNumber)}` : ""}{formatProspectNumber(client.prospectNumber) ? ` · ${formatProspectNumber(client.prospectNumber)}` : ""}</small>
             <h2>{client.name}</h2>
             <span>{client.customerType || "Client"} • {client.status || "Prospect"}</span>
+            {step.label ? <em className="dossier-step">{step.label}{step.detail ? ` · ${step.detail}` : ""}</em> : null}
           </div>
           <div className="client-record-actions">
             <button type="button" className="client-record-btn is-secondary client-photo-button-head" onClick={() => setPhotoOpen(true)}>
@@ -276,7 +280,7 @@ export default function ClientRecord({
                 const canStatuer = canStatuerAppointment(currentProfile, currentUserId, item) && options.length > 0;
                 const hint = rdvStatuerHint(currentProfile, currentUserId, item);
                 return (
-                  <article key={item.id} className="client-followup-card">
+                  <article key={item.id} className={`client-followup-card${isUnstatedVisit(item) ? " is-unstated" : ""}`}>
                     <div>
                       <small>{formatRdvDate(item.start)} · {formatRdvClock(item.start)}</small>
                       <strong>{item.appointmentType || "Rendez-vous"}</strong>
@@ -287,17 +291,17 @@ export default function ClientRecord({
                         Statut RDV
                         <select
                           className={`status-select ${rdvStatusTone(item.status)}`}
-                          value={displayRdvStatus(item.status)}
+                          value={normalizeAgendaStatus(item.status)}
                           disabled={busyId === item.id}
                           aria-label={`Statut du rendez-vous du ${formatRdvDate(item.start)}`}
                           onChange={event => changeRdvStatus(item, event.target.value)}
                         >
-                          {options.map(status => <option key={status} value={status}>{status}</option>)}
+                          {options.map(status => <option key={status} value={status}>{status === "Non statué" ? rdvJourneyLabel(item) : status}</option>)}
                         </select>
                         {hint ? <em>{hint}</em> : null}
                       </label>
                     ) : (
-                      <span className={`status-select ${rdvStatusTone(item.status)}`}>{displayRdvStatus(item.status)}</span>
+                      <span className={`status-select ${rdvStatusTone(item.status)}`}>{rdvJourneyLabel(item)}</span>
                     )}
                   </article>
                 );

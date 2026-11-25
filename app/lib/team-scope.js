@@ -1,5 +1,6 @@
 import { serviceRequest } from "./supabase-server";
 import {
+  agendaScopeIdsFromProfiles,
   buildCommercialScopeFilter,
   canViewOrgWideCommercialData,
   canViewTeamCommercialData,
@@ -24,6 +25,17 @@ export async function loadTeamMemberIds(profile, userId, { forDispatch = false }
     console.warn("loadTeamMemberIds", error.message);
     return [userId];
   }
+}
+
+export async function loadAgendaScopeIds(profile, userId, { forDispatch = false } = {}) {
+  if (!profile?.organization_id || !userId) return [userId].filter(Boolean);
+  if (canViewOrgWideCommercialData(profile) || (forDispatch && isProspectDispatcher(profile))) return null;
+  if (!canViewTeamCommercialData(profile)) return [String(userId)];
+  const orgId = profile.organization_id;
+  const rows = await serviceRequest(
+    `/rest/v1/profiles?select=id,full_name,email,role,manager,active&organization_id=eq.${encodeURIComponent(orgId)}&or=(active.eq.true,active.is.null)`
+  );
+  return agendaScopeIdsFromProfiles(profile, userId, rows, { forDispatch });
 }
 
 export async function loadPrivateAgendaOwnerIds(orgId) {

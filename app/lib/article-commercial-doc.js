@@ -7,8 +7,17 @@ export function articleCommercialDocKey(item = {}) {
   return String(item.articleId || item.id || item.code || item.reference || "").trim();
 }
 
+/** Chemin du site, pour une fiche trop lourde à coller dans l’article. */
+export function commercialDocPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\") || raw.includes("..")) return "";
+  if (!/^\/[A-Za-z0-9/_.-]+\.pdf$/i.test(raw)) return "";
+  return raw;
+}
+
 export function articleHasCommercialDoc(article = {}) {
-  return String(article?.ficheData || "").startsWith("data:");
+  const data = String(article?.ficheData || "");
+  return data.startsWith("data:") || Boolean(commercialDocPath(data));
 }
 
 export function commercialDocFilename(doc = {}, fallback = "documentation-commerciale") {
@@ -74,8 +83,46 @@ export function dataUrlToBlob(dataUrl) {
   return new Blob([bytes], { type: mime });
 }
 
+export function selectedCommercialPdfPaths(doc = {}, articles = []) {
+  return selectedCommercialDocs(doc, articles)
+    .map(item => commercialDocPath(item.ficheData))
+    .filter(Boolean);
+}
+
+export async function appendPdfBytes(pdfBlob, byteList = []) {
+  const { PDFDocument } = await import("pdf-lib");
+  const pdf = await PDFDocument.load(await pdfBlob.arrayBuffer());
+  for (const bytes of byteList) {
+    if (!bytes?.byteLength) continue;
+    const extra = await PDFDocument.load(bytes);
+    const pages = await pdf.copyPages(extra, extra.getPageIndices());
+    for (const page of pages) pdf.addPage(page);
+  }
+  const blob = new Blob([await pdf.save()], { type: "application/pdf" });
+  if (pdfBlob?.quotePageCount != null) blob.quotePageCount = pdfBlob.quotePageCount;
+  return blob;
+}
+
+export async function appendCommercialPdfPaths(pdfBlob, paths = []) {
+  const collected = [];
+  for (const path of paths) {
+    const safe = commercialDocPath(path);
+    if (!safe) continue;
+    const response = await fetch(safe);
+    if (!response.ok) throw new Error("Documentation commerciale introuvable.");
+    collected.push(new Uint8Array(await response.arrayBuffer()));
+  }
+  if (!collected.length) return pdfBlob;
+  return appendPdfBytes(pdfBlob, collected);
+}
+
 export function downloadArticleCommercialDoc(doc = {}) {
   if (typeof document === "undefined") return false;
+  const path = commercialDocPath(doc.ficheData);
+  if (path) {
+    window.open(path, "_blank", "noopener,noreferrer");
+    return true;
+  }
   if (!articleHasCommercialDoc(doc)) return false;
   const blob = dataUrlToBlob(doc.ficheData);
   const filename = commercialDocFilename(doc);

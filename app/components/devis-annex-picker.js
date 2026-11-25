@@ -86,10 +86,10 @@ export default function DevisAnnexPicker({
           </div>
           <button type="button" onClick={onClose} aria-label="Fermer"><X size={18} /></button>
         </header>
-        <p className="devis-annex-lead">Le devis est toujours imprimé. Cochez les documents à ajouter derrière.</p>
+        <p className="devis-annex-lead">Le devis est toujours imprimé, puis les conditions générales. Les documents cochés suivent.</p>
         {!loaded && <p className="devis-annex-empty">Préparation des documents…</p>}
         {loaded && choices.length === 0 && (
-          <p className="devis-annex-empty">Aucun document annexe pour ce devis. Vous pouvez imprimer le devis seul.</p>
+          <p className="devis-annex-empty">Aucun autre document pour ce devis. Les conditions générales sont ajoutées automatiquement.</p>
         )}
         {choices.length > 0 && (
           <ul className="devis-annex-grid">

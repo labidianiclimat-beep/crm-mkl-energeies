@@ -59,7 +59,7 @@ test("la file ne garde que les rendez-vous en retard du commercial, du plus anci
   assert.deepEqual(rows.map(item => item.id), ["older", "late"]);
 });
 
-test("chaque nouvelle connexion monte d’un cran, jusqu’au blocage", () => {
+test("chaque nouvelle connexion monte d’un cran, sans bloquer l’accès", () => {
   let record = advanceStatuerAlert(null, { connectionId: "c1", hasOverdue: true });
   assert.equal(record.step, 1);
   record = advanceStatuerAlert(record, { connectionId: "c1", hasOverdue: true });
@@ -67,11 +67,14 @@ test("chaque nouvelle connexion monte d’un cran, jusqu’au blocage", () => {
   record = advanceStatuerAlert(record, { connectionId: "c2", hasOverdue: true });
   assert.equal(record.step, 2);
   record = advanceStatuerAlert(record, { connectionId: "c3", hasOverdue: true });
-  assert.equal(record.step, 3);
-  record = advanceStatuerAlert(record, { connectionId: "c4", hasOverdue: true });
-  assert.equal(record.step, 3);
+  assert.equal(record.step, 2);
   assert.equal(statuerAlertShows(record, 1), true);
-  assert.equal(dismissStatuerAlert(record).dismissed, false);
+  record = dismissStatuerAlert(record);
+  assert.equal(record.dismissed, true);
+  assert.equal(statuerAlertShows(record, 1), false);
+  const storedLock = advanceStatuerAlert({ step: 3, connectionId: "old", dismissed: false }, { connectionId: "old", hasOverdue: true });
+  assert.equal(storedLock.step, 2);
+  assert.equal(dismissStatuerAlert(storedLock).dismissed, true);
 });
 
 test("une alerte fermée revient à la connexion suivante, et le compteur repart après statut", () => {
@@ -92,8 +95,7 @@ test("une alerte fermée revient à la connexion suivante, et le compteur repart
 test("les phrases suivent le cran et le nombre de rendez-vous", () => {
   assert.match(statuerAlertCopy(1, 1), /Première alerte/);
   assert.match(statuerAlertCopy(2, 2), /Deuxième alerte/);
-  assert.match(statuerAlertCopy(3, 1), /Pour continuer à utiliser votre espace CRM/);
-  assert.match(statuerAlertCopy(3, 2), /les rendez-vous ci-dessous/);
+  assert.doesNotMatch(statuerAlertCopy(3, 1), /Pour continuer à utiliser votre espace CRM/);
 });
 
 test("seul un commercial connecté pour lui-même reçoit les alertes", () => {
@@ -118,5 +120,7 @@ test("l’espace commercial affiche l’alerte de rendez-vous non statué", () =
   const lib = readFileSync(new URL("../app/lib/rdv-statuer-alert.js", import.meta.url), "utf8");
   assert.match(page, /RdvStatuerAlert/);
   assert.match(view, /Rendez-vous à statuer/);
-  assert.match(lib, /Pour continuer à utiliser votre espace CRM/);
+  assert.match(view, /Continuer/);
+  assert.doesNotMatch(view, /is-blocking|L’espace se rouvre/);
+  assert.doesNotMatch(lib, /Pour continuer à utiliser votre espace CRM/);
 });

@@ -99,6 +99,8 @@ test("le technicien ne voit que la pastille Opérations", () => {
   assert.equal(workspaceTitle("Maintenance", "Secrétariat"), "Maintenance et agenda");
   assert.equal(workspaceTitle("Maintenance", "Direction"), "Maintenance et agenda");
   assert.equal(workspaceTitle("Maintenance", "Admin VIP"), "Maintenance");
+  assert.equal(workspaceTitle("Agenda commercial"), "Agenda");
+  assert.equal(workspaceTitle("Suivi commerciaux"), "Suivi commerciaux");
   assert.match(page, /workspaceTitle\(label, currentRole\)/);
   assert.match(page, /workspaceTitle\(label, currentProfile\?\.role\)/);
 });

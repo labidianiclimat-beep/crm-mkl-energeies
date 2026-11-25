@@ -1,12 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { PDFDocument } from "pdf-lib";
 import {
+  appendPdfBytes,
   articleHasCommercialDoc,
   commercialDocFilename,
+  commercialDocPath,
   quoteCommercialDocs,
   selectedCommercialDocs,
+  selectedCommercialPdfPaths,
 } from "../app/lib/article-commercial-doc.js";
+import { devisAnnexChoices } from "../app/lib/devis-annex-choices.js";
 import { collectDevisAnnexImages } from "../app/lib/devis-print.js";
 import { documentToWizardState, emptyWizardState, wizardToPayload } from "../app/lib/devis-wizard.js";
 import { formToDevisRecord } from "../app/lib/devis.js";
@@ -70,7 +75,7 @@ test("le formulaire article et le recap devis exposent la documentation commerci
   assert.match(print, /selectedCommercialDocs/);
 });
 
-test("l impression colle les PDF commerciaux puis les CGV entreprise", async () => {
+test("l impression colle les PDF commerciaux choisis", async () => {
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const images = await collectDevisAnnexImages(
     {
@@ -88,9 +93,9 @@ test("l impression colle les PDF commerciaux puis les CGV entreprise", async () 
       company: { cgvName: "cgv.png", cgvData: png },
     }
   );
-  assert.equal(images.length, 3);
+  assert.equal(images.length, 2);
   assert.equal(images[0].data, png);
-  assert.equal(images[2].data, png);
+  assert.equal(images[1].data, png);
 });
 
 test("une facture ou pro forma n emporte ni CERFA ni documentation commerciale", async () => {
@@ -108,4 +113,42 @@ test("une facture ou pro forma n emporte ni CERFA ni documentation commerciale",
   const proforma = await collectDevisAnnexImages({ ...quoteLike, kind: "Pro forma" }, options);
   assert.equal(facture.length, 0);
   assert.equal(proforma.length, 0);
+});
+
+test("la fiche Edel est proposée à la validation sans être collée dans l article", () => {
+  const path = "/fiches/fiche-technique-edel-auer.pdf";
+  assert.equal(commercialDocPath(path), path);
+  assert.equal(commercialDocPath("../fiches/fiche.pdf"), "");
+  assert.equal(commercialDocPath("https://example.com/fiche.pdf"), "");
+  assert.equal(articleHasCommercialDoc({ ficheData: path, ficheName: "fiche-technique-edel-auer.pdf" }), true);
+  const articles = [{
+    id: "edel-270",
+    code: "EDEL-270D-2",
+    name: "Edel 270D/2",
+    ficheName: "fiche-technique-edel-auer.pdf",
+    ficheData: path,
+  }];
+  const doc = {
+    kind: "Devis",
+    items: [{ id: "l1", articleId: "edel-270", name: "Edel 270D/2" }],
+    printCommercialDocIds: ["edel-270"],
+  };
+  const choices = devisAnnexChoices(doc, articles);
+  assert.equal(choices.some(item => item.id === "commercial:edel-270" && item.checked), true);
+  assert.deepEqual(selectedCommercialPdfPaths(doc, articles), [path]);
+  assert.equal(selectedCommercialPdfPaths({ ...doc, printCommercialDocIds: [] }, articles).length, 0);
+});
+
+test("un PDF commercial servi par un chemin est ajouté à la fin du devis", async () => {
+  const quote = await PDFDocument.create();
+  quote.addPage();
+  const quoteBlob = new Blob([await quote.save()], { type: "application/pdf" });
+  quoteBlob.quotePageCount = 1;
+  const annex = await PDFDocument.create();
+  annex.addPage();
+  annex.addPage();
+  const merged = await appendPdfBytes(quoteBlob, [new Uint8Array(await annex.save())]);
+  const out = await PDFDocument.load(await merged.arrayBuffer());
+  assert.equal(out.getPageCount(), 3);
+  assert.equal(merged.quotePageCount, 1);
 });

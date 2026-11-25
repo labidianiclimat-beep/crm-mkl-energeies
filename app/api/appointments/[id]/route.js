@@ -17,6 +17,7 @@ import {
   durationFromRange,
   isAgendaAssignOrCommentPatch,
   isAgendaPhonePatch,
+  isPersonalAgendaKind,
 } from "../../../lib/agenda";
 import {
   applyGoogleSync,
@@ -72,7 +73,17 @@ function trackedDiff(before, after) {
   if (extraPhone(before) !== extraPhone(after)) {
     changes.push({ field: "phone", oldValue: extraPhone(before) || null, newValue: extraPhone(after) || null });
   }
+  const beforeSeller = extraSellerComment(before);
+  const afterSeller = extraSellerComment(after);
+  if (beforeSeller !== afterSeller) {
+    changes.push({ field: "sellerComment", oldValue: beforeSeller || null, newValue: afterSeller || null });
+  }
   return changes;
+}
+
+function extraSellerComment(row) {
+  const extra = row?.extra && typeof row.extra === "object" ? row.extra : {};
+  return String(extra.sellerComment || "");
 }
 
 function historyActionFor(field) {
@@ -182,7 +193,11 @@ export async function PATCH(request, { params }) {
         return Response.json({ error: "Vous ne pouvez pas réattribuer ce rendez-vous." }, { status: 403 });
       }
       const touchesNotes = Object.prototype.hasOwnProperty.call(body, "notes");
-      if (touchesNotes && !canWriteAgendaComment(auth.profile, auth.user.id, current)) {
+      const touchesSeller = Object.prototype.hasOwnProperty.call(body, "sellerComment");
+      if (touchesNotes && !isPersonalAgendaKind(current.kind)) {
+        return Response.json({ error: "L’instruction du rendez-vous ne peut pas être modifiée." }, { status: 403 });
+      }
+      if ((touchesNotes || touchesSeller) && !canWriteAgendaComment(auth.profile, auth.user.id, current)) {
         return Response.json({ error: "Vous ne pouvez pas commenter ce rendez-vous." }, { status: 403 });
       }
     }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { computeDocumentTotals } from "../app/lib/devis.js";
 import {
+  PV_BATTERY_INSTALL,
   PV_BATTERY_OPTION,
   PV_CONNECTION_OPTIONS,
   PV_OPTIMIZER_OPTION,
@@ -16,11 +17,27 @@ const group = [
 ];
 
 test("les montants TTC tombent juste avec la TVA 5,5 %", () => {
-  for (const ttc of [400, 1000, 125, 5000]) {
+  for (const ttc of [400, 1000, 125]) {
     const ht = htForExactTtc(ttc, 5.5);
     const totals = computeDocumentTotals({ items: [{ qty: 1, unit: ht, tax: 5.5 }], tax: 20 });
     assert.equal(Number(totals.totalTTC.toFixed(2)), ttc);
   }
+});
+
+test("la batterie et sa pose tombent juste en TVA 20 %", () => {
+  for (const ttc of [PV_BATTERY_OPTION.ttc, PV_BATTERY_INSTALL.ttc]) {
+    const ht = htForExactTtc(ttc, 20);
+    const totals = computeDocumentTotals({ items: [{ qty: 1, unit: ht, tax: 20 }], tax: 20 });
+    assert.equal(Number(totals.totalTTC.toFixed(2)), ttc);
+  }
+  const lines = [PV_BATTERY_OPTION, PV_BATTERY_INSTALL].map(spec => ({
+    qty: 1,
+    unit: htForExactTtc(spec.ttc, 20),
+    tax: 20,
+  }));
+  const totals = computeDocumentTotals({ items: lines, tax: 20 });
+  assert.equal(Number(totals.totalTTC.toFixed(2)), 5000);
+  assert.equal(Number(totals.lines[1].totalTTC.toFixed(2)), 550);
 });
 
 test("raccordement, optimiseur et batterie s ajoutent sous le groupe", () => {
@@ -33,10 +50,18 @@ test("raccordement, optimiseur et batterie s ajoutent sous le groupe", () => {
     "PV-RACCORD-LINKY",
     "PV-OPTIMISEUR",
     "PV-BAT-MARSTEK",
+    "INST-BAT-MARSTEK",
   ]);
   assert.equal(items[2].name, "Raccordement avec Linky en place");
+  assert.equal(items[2].tax, 5.5);
   assert.equal(items[3].name, "OPTIMISEUR");
-  assert.equal(items[4].name, "BAT-MARTEK VENUS-E");
+  assert.equal(items[3].tax, 5.5);
+  assert.equal(items[4].name, "BAT-MARTEK VENUS-E — 5 kW");
+  assert.equal(items[4].tax, 20);
+  assert.equal(items[5].name, "Installation de batterie Marstek");
+  assert.equal(items[5].tax, 20);
+  assert.equal(items[5].measureUnit, "Forfait");
+  assert.match(items[5].description, /Pose et fixation de la batterie Marstek/);
   const withCatalog = applyPvBundleOptions(group, 1, { battery: PV_BATTERY_OPTION.id }, [{
     code: "MARSTEK-VENUS-E",
     name: "BAT-MARTEK VENUS-E",
@@ -49,8 +74,18 @@ test("raccordement, optimiseur et batterie s ajoutent sous le groupe", () => {
   const totals = computeDocumentTotals({ items, tax: 20 });
   assert.equal(Number(totals.lines[2].totalTTC.toFixed(2)), 400);
   assert.equal(Number(totals.lines[3].totalTTC.toFixed(2)), 125);
-  assert.equal(Number(totals.lines[4].totalTTC.toFixed(2)), 5000);
+  assert.equal(Number(totals.lines[4].totalTTC.toFixed(2)), 4450.01);
+  assert.equal(Number(totals.lines[5].totalTTC.toFixed(2)), 550);
+  const batteryPack = computeDocumentTotals({
+    items: [totals.lines[4], totals.lines[5]],
+    tax: 20,
+  });
+  assert.equal(Number(batteryPack.totalTTC.toFixed(2)), 5000);
   assert.equal(items[2].bundleId, "g1");
+  assert.equal(items[5].bundleId, "g1");
+  const withoutBattery = applyPvBundleOptions(items, 1, { battery: "" });
+  assert.equal(withoutBattery.some(item => item.code === PV_BATTERY_OPTION.code), false);
+  assert.equal(withoutBattery.some(item => item.code === PV_BATTERY_INSTALL.code), false);
 });
 
 test("sans optimiseur la ligne n apparait pas", () => {

@@ -29,11 +29,11 @@ export function overdueUnstatuedAppointments(appointments, userId, now = Date.no
 }
 
 export function normalizeStatuerAlert(record) {
-  const step = Math.max(0, Math.min(3, Number(record?.step) || 0));
+  const step = Math.max(0, Math.min(2, Number(record?.step) || 0));
   return {
     step,
     connectionId: String(record?.connectionId || ""),
-    dismissed: Boolean(record?.dismissed) && step > 0 && step < 3,
+    dismissed: Boolean(record?.dismissed) && step > 0,
   };
 }
 
@@ -49,7 +49,7 @@ export function advanceStatuerAlert(record, { connectionId = "", hasOverdue = fa
   }
   if (previous.connectionId === id) return previous;
   return {
-    step: Math.min(3, previous.step + 1),
+    step: Math.min(2, previous.step + 1),
     connectionId: id,
     dismissed: false,
   };
@@ -57,14 +57,12 @@ export function advanceStatuerAlert(record, { connectionId = "", hasOverdue = fa
 
 export function dismissStatuerAlert(record) {
   const current = normalizeStatuerAlert(record);
-  if (current.step >= 3) return current;
   return { ...current, dismissed: true };
 }
 
 export function statuerAlertShows(record, overdueCount) {
   const current = normalizeStatuerAlert(record);
   if (!overdueCount || current.step < 1) return false;
-  if (current.step >= 3) return true;
   return !current.dismissed;
 }
 
@@ -75,14 +73,9 @@ export function statuerAlertCopy(step, count = 1) {
       ? "Première alerte : des rendez-vous sont encore non statués."
       : "Première alerte : un rendez-vous est encore non statué.";
   }
-  if (step === 2) {
-    return several
-      ? "Deuxième alerte : ces rendez-vous ne sont toujours pas statués."
-      : "Deuxième alerte : ce rendez-vous n’est toujours pas statué.";
-  }
   return several
-    ? "Pour continuer à utiliser votre espace CRM, merci de statuer les rendez-vous ci-dessous."
-    : "Pour continuer à utiliser votre espace CRM, merci de statuer le rendez-vous ci-dessous.";
+    ? "Deuxième alerte : ces rendez-vous ne sont toujours pas statués."
+    : "Deuxième alerte : ce rendez-vous n’est toujours pas statué.";
 }
 
 export function formatStatuerWhen(start) {

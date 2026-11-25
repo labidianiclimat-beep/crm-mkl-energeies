@@ -97,6 +97,15 @@ export function bundleUsesMicroInverter(bundle) {
   return hay.includes("micro");
 }
 
+export function isStandaloneBatteryGroup(bundle) {
+  if (!bundle) return false;
+  const category = plain(bundle.category || "");
+  if (category && !category.includes("photovolta")) return false;
+  const sub = plain([bundle.subcategory, bundle.family].filter(Boolean).join(" "));
+  if (!sub.includes("batter")) return false;
+  return !PV_QUOTE_SIZES.some(size => bundleMatchesPvSize(bundle, size));
+}
+
 export function bundleMatchesPvSize(bundle, size) {
   if (!bundle || !size) return false;
   const hay = bundleHay(bundle);

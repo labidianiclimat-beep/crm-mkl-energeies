@@ -1,3 +1,4 @@
+import { canAccessCaControl } from "./ca-control.js";
 import { grantedModules, normalizeRoleLabel } from "./roles.js";
 
 export const navModuleMap = {
@@ -39,8 +40,9 @@ export function canAccessNav(allowedModules, label) {
   return allowedModules.includes(moduleForNav(label));
 }
 
-/** Titre affiché. Le module ouvert reste « Maintenance ». */
+/** Titre affiché. Le module ouvert reste « Maintenance » ou « Agenda commercial ». */
 export function workspaceTitle(label, role) {
+  if (label === "Agenda commercial") return "Agenda";
   if (label !== "Maintenance") return label;
   const normalized = normalizeRoleLabel(role);
   if (normalized === "Technicien") return "Mon agenda";
@@ -55,6 +57,7 @@ export function homeFamiliesForRole(families, role) {
 }
 
 export function canAccessWorkspace(allowedModules, label, profile) {
+  if (label === "Contrôle CA") return canAccessCaControl(profile);
   if (isVipOnlyNav(label)) {
     return normalizeRoleLabel(profile?.role) === "Admin VIP";
   }

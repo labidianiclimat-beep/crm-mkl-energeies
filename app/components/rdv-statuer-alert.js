@@ -41,11 +41,9 @@ export default function RdvStatuerAlert({ profile, userId, appointments, onUpdat
 
   if (!statuerAlertShows(record, overdue.length)) return null;
 
-  const blocking = record.step >= 3;
   const sentence = statuerAlertCopy(record.step, overdue.length);
 
   function dismiss() {
-    if (blocking) return;
     const next = dismissStatuerAlert(record);
     writeStatuerAlert(localStorage, userId, next);
     setRecord(next);
@@ -66,9 +64,9 @@ export default function RdvStatuerAlert({ profile, userId, appointments, onUpdat
 
   return (
     <div
-      className={`backdrop rdv-statuer-backdrop${blocking ? " is-blocking" : ""}`}
+      className="backdrop rdv-statuer-backdrop"
       onMouseDown={event => {
-        if (!blocking && event.target === event.currentTarget) dismiss();
+        if (event.target === event.currentTarget) dismiss();
       }}
     >
       <div className="modal agenda-welcome-modal rdv-statuer-modal" role="dialog" aria-modal="true" aria-labelledby="rdv-statuer-title">
@@ -76,7 +74,7 @@ export default function RdvStatuerAlert({ profile, userId, appointments, onUpdat
           <div className="agenda-welcome-brand">
             <span className="agenda-welcome-mark"><AlertTriangle size={18}/></span>
             <div>
-              <p>{blocking ? "Espace CRM" : record.step === 2 ? "Deuxième alerte" : "Première alerte"}</p>
+              <p>{record.step === 2 ? "Deuxième alerte" : "Première alerte"}</p>
               <h2 id="rdv-statuer-title">{sentence}</h2>
             </div>
           </div>
@@ -109,9 +107,7 @@ export default function RdvStatuerAlert({ profile, userId, appointments, onUpdat
         </div>
         {error ? <p className="rdv-statuer-error" role="alert">{error}</p> : null}
         <div className="agenda-welcome-footer">
-          {blocking
-            ? <p className="rdv-statuer-lock">Choisissez un statut pour chaque rendez-vous. L’espace se rouvre ensuite.</p>
-            : <button type="button" className="primary" onClick={dismiss}>Continuer</button>}
+          <button type="button" className="primary" onClick={dismiss}>Continuer</button>
         </div>
       </div>
     </div>

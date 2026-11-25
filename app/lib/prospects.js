@@ -1,4 +1,4 @@
-const CONTACT_SHEET_STAGES = new Set(["", "Nouveau", "À contacter", "Rendez-vous planifié"]);
+const CONTACT_SHEET_STAGES = new Set(["", "Nouveau", "À contacter", "NRP", "Rendez-vous planifié"]);
 
 export function isContactSheetProspect(prospect = {}, appointment = null) {
   const desired = String(prospect?.desiredKind || "").trim().toLowerCase();
@@ -11,6 +11,7 @@ export function isContactSheetProspect(prospect = {}, appointment = null) {
 export const PROSPECT_STAGES = [
   "Nouveau",
   "À contacter",
+  "NRP",
   "Qualifié",
   "Rendez-vous planifié",
   "Étude",
@@ -39,6 +40,9 @@ export const PROSPECT_SOURCES = [
   "Prospection",
   "Appel entrant",
   "Site internet",
+  "Contact Google",
+  "Contact Meta",
+  "Contact Effy",
   "Recommandation",
   "Partenaire",
   "Salon",
@@ -158,8 +162,8 @@ export function prospectToUi(row, names = {}) {
     address: extra.address || extra.adresse || "",
     addressComplement: extra.addressComplement || extra.complement_adresse || "",
     postalCode: extra.postalCode || extra.code_postal || "",
-    type: formatProjectTypes(types) || "Photovoltaïque",
-    types: types.length ? types : ["Photovoltaïque"],
+    type: formatProjectTypes(types),
+    types,
     value: Number(row.estimated_value || extra.value || 0),
     power: extra.power || "À définir",
     source: row.source || extra.source || "",
@@ -196,6 +200,10 @@ export function prospectToUi(row, names = {}) {
   };
 }
 
+export function appointmentVisitRound(value) {
+  return String(value || "").trim().toUpperCase() === "R2" ? "R2" : "";
+}
+
 export function appointmentToUi(row, names = {}) {
   if (!row) return null;
   const extra = extraOf(row);
@@ -227,6 +235,8 @@ export function appointmentToUi(row, names = {}) {
     manager: names[managerId] || extra.manager || "",
     status,
     notes: row.notes || extra.notes || "",
+    sellerComment: String(extra.sellerComment || ""),
+    visitRound: appointmentVisitRound(extra.visitRound),
     appointmentType: extra.appointmentType || extra.appointment_type || (kind === "rappel" ? "Appel téléphonique" : "Visite commerciale"),
     kind,
     subject: extra.subject || extra.objet || (isGoogle ? (row.prospect_name || "Sans titre") : ""),
@@ -308,6 +318,44 @@ export function formToProspectRecord(input, { organizationId, createdBy, default
   };
 }
 
+/** Nom tel qu’il est saisi, puis téléphone et adresse pour la carte agenda. */
+export function agendaCardContact(item = {}, prospect = null) {
+  const full = String(prospect?.name || item.prospectName || "").trim();
+  const parts = full.split(/\s+/).filter(Boolean);
+  const lastName = parts[0] || full || "Sans titre";
+  const firstName = parts.slice(1).join(" ");
+  const phone = String(item.phone || prospect?.phone || prospect?.landline || "").trim();
+  const street = String(item.address || prospect?.address || "").trim();
+  const postal = String(prospect?.postalCode || item.postalCode || "").trim();
+  const city = String(prospect?.city || item.city || "").trim();
+  const streetKey = street.toLowerCase();
+  const address = formatFullAddress({
+    address: street,
+    addressComplement: streetKey.includes(String(prospect?.addressComplement || "").trim().toLowerCase()) ? "" : prospect?.addressComplement,
+    postalCode: postal && streetKey.includes(postal) ? "" : postal,
+    city: city && streetKey.includes(city.toLowerCase()) ? "" : city,
+  });
+  return {
+    name: full || "Sans titre",
+    lastName,
+    firstName,
+    phone,
+    address,
+  };
+}
+
+/** Commentaire du prospect, complété par la note propre au rendez-vous. */
+export function agendaCommentForSeller(prospectNotes, appointmentNotes) {
+  const prospect = String(prospectNotes || "").trim();
+  const appointment = String(appointmentNotes || "").trim();
+  if (!prospect) return appointment;
+  if (!appointment || appointment === prospect) return prospect;
+  if (appointment.includes(prospect) || prospect.includes(appointment)) {
+    return prospect.length >= appointment.length ? prospect : appointment;
+  }
+  return `${prospect}\n${appointment}`;
+}
+
 export function formToAppointmentRecord(input, { organizationId, createdBy } = {}) {
   const extra = extraOf(input);
   const start = String(input.start || input.starts_at || input.appointmentAt || "").trim();
@@ -372,6 +420,8 @@ export function formToAppointmentRecord(input, { organizationId, createdBy } = {
         })
         || String(extra.address || extra.adresse || "").trim(),
       phone: String(input.phone || extra.phone || "").trim(),
+      sellerComment: String(input.sellerComment != null ? input.sellerComment : (extra.sellerComment || "")).trim(),
+      visitRound: appointmentVisitRound(input.visitRound || extra.visitRound),
       priority: String(input.priority || extra.priority || "normale"),
       meetingMode: String(input.meetingMode || extra.meetingMode || (kind === "rappel" ? "téléphone" : "domicile")),
       reminderOffsets,

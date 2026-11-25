@@ -3,7 +3,6 @@
 import { quoteHasAirEauHeatPump, ANAH_PAGE_PATHS } from "./anah-mandat.js";
 import { quoteCommercialDocs } from "./article-commercial-doc.js";
 import { CERFA_PAGE_PATHS, quoteHasVat55 } from "./cerfa-tva.js";
-import { companyHasCgv } from "./company.js";
 import { PV_MANDAT_PAGE_PATH, quoteHasPhotovoltaic } from "./pv-mandat.js";
 
 export function devisAnnexChoices(doc = {}, articles = [], company = {}) {
@@ -47,16 +46,6 @@ export function devisAnnexChoices(doc = {}, articles = [], company = {}) {
       checked: doc.printAnahMandat !== false,
     });
   }
-  if (companyHasCgv(company)) {
-    choices.push({
-      id: "cgv",
-      title: "Conditions générales de vente",
-      detail: company.cgvName || "CGV",
-      thumb: String(company.cgvData || "").startsWith("data:image/") ? company.cgvData : "",
-      dataUrl: company.cgvData || "",
-      checked: doc.printCgv !== false,
-    });
-  }
   return choices;
 }
 
@@ -71,6 +60,5 @@ export function applyAnnexChoices(doc = {}, choices = []) {
     printHeatPumpFicheIds: doc.printHeatPumpFicheIds || [],
     printPvMandat: on("pv"),
     printAnahMandat: on("anah"),
-    printCgv: on("cgv"),
   };
 }

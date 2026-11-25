@@ -1,15 +1,16 @@
 import { normalizeRoleLabel } from "./roles.js";
+import { weekRange } from "./entretien-agenda.js";
+import { installationDay } from "./installation-planning.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const INSTALLATION_FINANCE_WRITE_ROLES = [
   "Secrétariat",
-  "Responsable technique",
   "Superadmin",
   "Admin VIP",
 ];
 
-export const INSTALLATION_FINANCE_READ_ROLES = ["Superadmin", "Admin VIP"];
+export const INSTALLATION_FINANCE_READ_ROLES = ["Superadmin", "Admin VIP", "Secrétariat"];
 
 export const INSTALLATION_SALES_ROLES = ["Commercial", "Responsable commercial"];
 
@@ -40,6 +41,12 @@ export function canWriteInstallationFinance(role) {
 
 export function canReadInstallationFinance(role) {
   return INSTALLATION_FINANCE_READ_ROLES.includes(normalizeRoleLabel(role));
+}
+
+/** Totaux de la semaine et du mois : superadmin et admin VIP seulement. */
+export function canReadInstallationMoneyTotals(role) {
+  const label = normalizeRoleLabel(role);
+  return label === "Superadmin" || label === "Admin VIP";
 }
 
 export function isInstallationSalesRole(role) {
@@ -84,6 +91,28 @@ export function formatEuroFromCents(cents) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount / 100);
+}
+
+/** Somme des ventes TTC des chantiers dont le début tombe dans la semaine ou le mois. */
+export function installationMoneyTotals(installations = [], financesById = {}, todayIso = "") {
+  const today = String(todayIso || "");
+  const week = /^\d{4}-\d{2}-\d{2}$/.test(today) ? weekRange(today) : { days: [] };
+  const month = today.slice(0, 7);
+  const seen = new Set();
+  let weekCents = 0;
+  let monthCents = 0;
+  for (const item of installations || []) {
+    const id = String(item?.id || "");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const day = installationDay(item);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    const cents = Number(financesById?.[id]?.saleTtcCents);
+    if (!Number.isSafeInteger(cents) || cents < 0) continue;
+    if (week.days.includes(day)) weekCents += cents;
+    if (month && day.slice(0, 7) === month) monthCents += cents;
+  }
+  return { weekCents, monthCents };
 }
 
 export function emptyInstallationFinance() {

@@ -1,7 +1,7 @@
 /**
  * Compatibilité de la taxonomie avec le module Prospects existant.
  *
- * Ce fichier protège trois acquis : les neuf provenances historiques restent
+ * Ce fichier protège trois acquis : les provenances saisies à la main restent
  * toutes rattachables, le miroir écrit dans `source` reste consommable par les
  * écrans actuels, et le mécanisme prospecteur / commercial n’est pas dupliqué.
  */
@@ -24,9 +24,12 @@ import {
   mirrorSourceLabel,
 } from "../app/lib/origin-taxonomy.js";
 
-test("les neuf provenances historiques sont toutes rattachées à une catégorie connue", () => {
+test("les provenances saisies à la main sont toutes rattachées à une catégorie connue", () => {
   const codes = ORIGIN_CATEGORIES.map(item => item.code);
-  assert.equal(PROSPECT_SOURCES.length, 9);
+  assert.equal(PROSPECT_SOURCES.length, 12);
+  assert.ok(PROSPECT_SOURCES.includes("Contact Google"));
+  assert.ok(PROSPECT_SOURCES.includes("Contact Meta"));
+  assert.ok(PROSPECT_SOURCES.includes("Contact Effy"));
   for (const source of PROSPECT_SOURCES) {
     const mapped = legacySourceToOrigin(source);
     assert.ok(codes.includes(mapped.category), `${source} non rattachée`);

@@ -6,6 +6,7 @@ import {
   addPurchaseLine,
   assembleInstallationFinances,
   canReadInstallationFinance,
+  canReadInstallationMoneyTotals,
   canWriteInstallationFinance,
   centsToInput,
   emptyInstallationFinance,
@@ -13,6 +14,7 @@ import {
   financeWriteResponse,
   formatEuroFromCents,
   installationFinanceAudit,
+  installationMoneyTotals,
   installationSalespeople,
   parseEuroToCents,
   removePurchaseLine,
@@ -117,10 +119,12 @@ test("les lignes d’achat s’ajoutent et se retirent avant l’enregistrement"
 });
 
 test("seuls les rôles prévus saisissent ou consultent les montants", () => {
-  for (const role of ["Secrétariat", "Responsable technique"]) {
-    assert.equal(canWriteInstallationFinance(role), true, role);
-    assert.equal(canReadInstallationFinance(role), false, role);
-  }
+  assert.equal(canWriteInstallationFinance("Secrétariat"), true);
+  assert.equal(canReadInstallationFinance("Secrétariat"), true);
+  assert.equal(canReadInstallationMoneyTotals("Secrétariat"), false);
+  assert.equal(canWriteInstallationFinance("Responsable technique"), false);
+  assert.equal(canReadInstallationFinance("Responsable technique"), false);
+  assert.equal(canReadInstallationMoneyTotals("Responsable technique"), false);
   for (const role of ["Superadmin", "Admin VIP", "Admin second"]) {
     assert.equal(canWriteInstallationFinance(role), true, role);
     assert.equal(canReadInstallationFinance(role), true, role);
@@ -217,4 +221,25 @@ test("les routes refusent la lecture et l’écriture avant tout accès aux mont
   const autres = source("../supabase/migrations/20261027_installation_finance_autres.sql");
   assert.match(autres, /alter column commercial_id drop not null/);
   assert.match(autres, /p_commercial_id is not null and not exists/);
+});
+
+test("les totaux de la semaine et du mois additionnent les ventes TTC", () => {
+  const totals = installationMoneyTotals([
+    { id: "week", start: "2026-11-26T08:00" },
+    { id: "month", start: "2026-11-02T08:00" },
+    { id: "later", start: "2026-12-02T08:00" },
+    { id: "week", start: "2026-11-26T09:00" },
+  ], {
+    week: { saleTtcCents: 150000 },
+    month: { saleTtcCents: 50000 },
+    later: { saleTtcCents: 80000 },
+  }, "2026-11-24");
+  assert.equal(totals.weekCents, 150000);
+  assert.equal(totals.monthCents, 200000);
+  assert.equal(canReadInstallationFinance("Superadmin"), true);
+  assert.equal(canReadInstallationFinance("Admin VIP"), true);
+  assert.equal(canReadInstallationMoneyTotals("Superadmin"), true);
+  assert.equal(canReadInstallationMoneyTotals("Admin VIP"), true);
+  assert.equal(canReadInstallationFinance("Secrétariat"), true);
+  assert.equal(canReadInstallationMoneyTotals("Secrétariat"), false);
 });

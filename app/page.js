@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRecordTable } from "./lib/use-record-table";
-import { INSTALLATION_CHECKS, canEditInstallation, installationAssigneeLabel, installationBoards, installationCheckLabel, installationCheckValue, installationChecksFromForm, isFinishedInstallation, isSubcontractor, SUBCONTRACTOR_DOCUMENTS, SUBCONTRACTOR_SPECIALTIES, contractorDocumentReady } from "./lib/installation-planning";
-import { canReadInstallationFinance, canWriteInstallationFinance, emptyInstallationFinance, financeToDraft, installationSalespeople, stripInstallationFinance, validateInstallationFinance } from "./lib/installation-finance";
+import { INSTALLATION_CHECKS, canEditInstallation, compareInstallationsRecent, installationAlertsWithinWeek, installationAssigneeLabel, installationBoards, installationCheckLabel, installationCheckStamp, installationCheckValue, installationChecksFromForm, isFinishedInstallation, isSubcontractor, SUBCONTRACTOR_DOCUMENTS, SUBCONTRACTOR_SPECIALTIES, contractorDocumentReady } from "./lib/installation-planning";
+import { canReadInstallationFinance, canReadInstallationMoneyTotals, canWriteInstallationFinance, emptyInstallationFinance, financeToDraft, formatEuroFromCents, installationMoneyTotals, installationSalespeople, stripInstallationFinance, validateInstallationFinance } from "./lib/installation-finance";
 import InstallationFinanceFields, { InstallationFinanceSummary } from "./components/installation-finance-fields";
 import CommercialSalePanel from "./components/commercial-sale-panel";
 import SubcontractorDocuments from "./components/subcontractor-documents";
@@ -20,7 +20,7 @@ import {
   prospectIdentity,
   readLocalLegacyState,
 } from "./lib/legacy-state-recovery";
-import { canApplyRdvStatus, displayRdvStatus, isAppointmentOutcomeOnlyPatch, rdvStatusDeniedMessage, rdvStatusTone } from "./lib/appointment-status";
+import { canApplyRdvStatus, displayRdvStatus, isAppointmentOutcomeOnlyPatch, normalizeAgendaStatus, rdvStatusDeniedMessage, rdvStatusTone } from "./lib/appointment-status";
 import { APPOINTMENT_MOVE_ERROR, agendaScheduleIsChanging, canCorrectAppointmentPhone, isAgendaAssignOrCommentPatch, isAgendaPhonePatch } from "./lib/agenda";
 import { canAccessModule, canEditExistingAppointment, canEditExistingClient, canPerformAction, isAdminRole, isAdminVip } from "./lib/permissions";
 import { canAssignClientCommercial, normalizeClientStatus } from "./lib/clients";
@@ -49,7 +49,7 @@ import { resizeBrandLogoFile } from "./lib/brands";
 import { canInvoiceQuote, cloneDocumentForCreate, computeDocumentTotals, defaultQuoteDeliveryDate, defaultQuoteValidityDate, DEVIS_FINANCIERS, ELECTRICITY_OPERATORS, findQuoteByNumber, firstMonthlyDelayChoices, isDevisOwnerRole, isUnassignedDevis, isQuoteBundleStart, mustAssignDevisCommercial, quoteArticleRefs, quoteBundleHeading, quoteMatchesClientQuery, quoteStatusLabel, setQuoteBundleHeading, splitPersonName, statusesForKind, statusTone, todayIsoDate } from "./lib/devis";
 import { filledQuoteItems, isPreparedFreeLine, withPreparedFreeLine } from "./lib/devis-wizard";
 import { visibleProspects } from "./lib/prospect-to-client";
-import { ACCESS_MODULES, ACTION_PERMISSIONS, extractGrantedActions, normalizeRoleLabel, persistProfileAccess, roleDescriptions, roleModuleDefaults, sanitizeGrantedModules } from "./lib/roles";
+import { ACCESS_MODULES, ACTION_PERMISSIONS, SIGNED_QUOTE_VALIDATION, extractGrantedActions, normalizeRoleLabel, persistProfileAccess, roleDescriptions, roleModuleDefaults, sanitizeGrantedModules } from "./lib/roles";
 import { canViewTeamCommercialData } from "./lib/scoping";
 import { logoutCrm } from "./components/crm-access-gate";
 import { clearRolePreview } from "./lib/role-preview";
@@ -124,6 +124,7 @@ import CommercialAgendaView from "./components/commercial-agenda";
 import { popWorkspacePlace, pushWorkspacePlace, sameWorkspacePlace, workspaceBackLabel } from "./lib/workspace-nav";
 import ProspectDispatchBoard from "./components/prospect-dispatch-board";
 import ProspectingDashboard from "./components/prospecting-dashboard";
+import CaControl from "./components/ca-control";
 import WebLeadBacklog from "./components/web-lead-backlog";
 import { canReviewWebLeads } from "./lib/web-lead-admin";
 import { workloadByCommercial } from "./components/agenda-home";
@@ -144,12 +145,12 @@ import {
   Download, FileSpreadsheet, CheckCircle2, LockKeyhole, Mail,
   Trash2, RefreshCw, ReceiptText, Send, CircleDollarSign, Package, Car,
   Layers3, Upload, Pencil, ClipboardList, AlertTriangle, Truck, Inbox,
-  Eye, ShoppingCart, Library, BadgeEuro, LogOut, ArrowLeft, Sun, Tag, Copy, PenLine, Flame, Camera, ScrollText, Table2, Ruler
+  Eye, ShoppingCart, Library, BadgeEuro, LogOut, ArrowLeft, Sun, Tag, Copy, PenLine, Flame, Camera, ScrollText, Table2, Ruler, Bell
 } from "lucide-react";
 
 const nav = [
   ["Applications", Package],
-  ["Vue d’ensemble", LayoutDashboard], ["Prospects", Users],
+  ["Vue d’ensemble", LayoutDashboard], ["Contrôle CA", Euro], ["Prospects", Users],
   ["Suivi commerciaux", Table2],
   ["Agenda commercial", CalendarDays],
   ["Clients", Building2], ["Chantiers", HardHat],
@@ -283,6 +284,8 @@ export default function Home() {
   const [appointmentsReady,setAppointmentsReady]=useState(false);
   const [agendaFocusId,setAgendaFocusId]=useState("");
   const [agendaFocusStart,setAgendaFocusStart]=useState("");
+  const [chantierOffer,setChantierOffer]=useState(null);
+  const [installLaunch,setInstallLaunch]=useState(null);
   const [clients,setClients]=useState([]);
   const [contracts,setContracts]=useRecordTable("mkl-contracts");
   const [team,setTeam]=useState([]);
@@ -1103,6 +1106,13 @@ export default function Home() {
           representativeLastName:document.representativeLastName||"",
           representativeFirstName:document.representativeFirstName||"",
           representativeSignature:document.representativeSignature||"",
+          ...(document.kind==="Devis"?{
+            siteDifferent:d.siteDifferent==="true",
+            siteAddress:d.siteAddress||"",
+            siteComplement:d.siteComplement||"",
+            sitePostalCode:d.sitePostalCode||"",
+            siteCity:d.siteCity||"",
+          }:{}),
         };
         const url=isEditingExisting?`/api/devis/${editingBilling.id}`:"/api/devis";
         const method=isEditingExisting?"PATCH":"POST";
@@ -1796,6 +1806,13 @@ export default function Home() {
         setOpps(rows=>rows.map(row=>String(row.id)===String(prospectId)?{...row, rdvStatus:live}:row));
         setEditingProspect(current=>current&&String(current.id)===String(prospectId)?{...current, rdvStatus:live}:current);
       }
+      if(normalizeAgendaStatus(changes.status)==="Commande signée" && normalizeAgendaStatus(item.status)!=="Commande signée") {
+        const prospect=opps.find(row=>String(row.id)===String(prospectId));
+        const clientId=prospect?.clientId||"";
+        const client=clients.find(row=>String(row.id)===String(clientId));
+        const already=client&&installations.some(job=>String(job.clientId)===String(client.id));
+        if(client&&!already) setChantierOffer({client});
+      }
       return saved;
     } catch(error) {
       if(!isNetworkFailure(error)) throw error;
@@ -1965,6 +1982,7 @@ export default function Home() {
       {canViewActive&&(active==="Maintenance"||entretienKeepAlive)?<div hidden={active!=="Maintenance"} className="entretien-keep-alive"><EntretienModule contracts={contracts} setContracts={setContracts} clients={clients} setBilling={setBilling} query={query} onAdd={()=>{setDocumentClient(null);setModal("contract");}} onOpenReport={(preset,client)=>setPdfStudio({kind:"report",client:client||null,id:"",preset:preset||null,token:Date.now()})} onOpenPrevisit={visit=>{const start=visit?.scheduled_start?new Date(visit.scheduled_start):null;const date=start&&!Number.isNaN(start.getTime())?new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit"}).format(start):"";setPdfStudio({kind:"previsit",client:{id:visit.client_id,name:visit.title||"Client",address:visit.client_address||visit.location||"",phone:visit.client_phone||"",directoryKind:"client"},id:"",preset:{date,technician:visit.technicianName||""},token:Date.now()});}} toast={showToast} currentProfile={currentProfile} team={team}/></div>:null}
       {canViewActive&&active==="Applications" ? <Dashboard filtered={filtered} contracts={contracts} quotes={billing.filter(d=>d.kind==="Devis")} navigate={setActive} selectedFamily={selectedFamily} onSelectFamily={setSelectedFamily} applicationsOnly allowedModules={allowedModules} adminVip={isAdminVip(currentRole)} currentProfile={currentProfile} fleetDriver={fleetDriver} canBackup={canBackup} userName={userName} onBackup={exportFullBackup} legacyReport={legacyReport} legacyBusy={legacyBusy} onRecoverLegacy={recoverLegacyState} onDownloadLegacy={downloadLegacyArchive} appointments={commercialAppointments} currentUserId={currentProfile?.id} commercials={commercials} canFilter={canAssignCommercial} onUpdateAppointment={updateAppointment} toast={showToast} canEditAppointments={canEditAppointments} onOpenRequest={id=>{setRequestFocus(id);setActive("Tickets internes");setQuery("");}}/> :
        canViewActive&&active==="Vue d’ensemble" ? (dispatcher ? <ProspectingDashboard navigate={setActive} userName={userName}/> : <CommercialOverview navigate={setActive} allowedModules={allowedModules} userName={userName} canFilter={canAssignCommercial||["Direction","Admin VIP","Superadmin","Secrétariat","Responsable commercial"].includes(currentRole)} appointments={commercialAppointments} commercials={commercials} currentUserId={currentProfile?.id} viewerIsVip={isAdminVip(currentRole)}/>) :
+       canViewActive&&active==="Contrôle CA" ? <CaControl query={query} toast={showToast}/> :
        canViewActive&&active==="Prospects" ? <>
          <ProspectsView prospects={opps} appointments={commercialAppointments} query={query} canDispatch={canSeeQueue} canCreateQuote={canAccessModule(currentProfile,"Devis")} canDelete={canDeleteProspects} consultOnly={!canEditExistingProspect(currentProfile)&&!fieldProspector} canReviseRow={prospect=>canReviseProspect(currentProfile,prospect)} canPlan={!fieldProspector&&canEditExistingProspect(currentProfile)} fieldWindow={fieldProspector} includeConverted={fieldProspector||dispatcher} onAdd={()=>{setEditingProspect(null);setModal("prospect");}} onEdit={prospect=>{setEditingProspect(stampProspectRdv(prospect, commercialAppointments));setModal("prospect");}} onCreateQuote={prospect=>{openDevisWizard({ prospect });}} onSchedule={scheduleProspectAppointment} onAssign={assignProspect} onDelete={deleteProspect} onOpenAgenda={openDispatchOnAgenda} toast={showToast}/>
          {/* Demandes du site restées en échec ou en vérification de doublon.
@@ -1972,14 +1990,14 @@ export default function Home() {
              prospection travaille déjà. Même autorisation que la route. */}
          {canReviewWebLeads(currentProfile) && <WebLeadBacklog/>}
        </> :
-       canViewActive&&(active==="Agenda commercial"||active==="Suivi commerciaux"||active==="Rendez-vous commerciaux") ? <CommercialAgendaView key={active} appointments={commercialAppointments} prospects={visibleProspects(opps)} linkProspects={rdvDirectory} clients={clients} commercials={commercials} query={query} currentUserId={currentProfile?.id} currentProfile={currentProfile} canAssignCommercial={canAssignCommercial||canDispatch} canReassignCommercial={canAssignCommercial||dispatcher} focusAppointmentId={agendaFocusId} focusAppointmentStart={agendaFocusStart} onFocusHandled={()=>{setAgendaFocusId("");setAgendaFocusStart("");}} onAddProspect={()=>setModal("prospect")} onCreateEvent={createAppointment} onUpdate={updateAppointment} onRemove={removeAppointment} onOpenProspect={prospect=>{if(prospect){setEditingProspect(stampProspectRdv(prospect, commercialAppointments));setModal("prospect");setActive("Prospects");}} } onOpenClient={row=>{const client=clients.find(item=>String(item.id)===String(row?.clientId));if(client) setBoardClient(client);}} onGoogleSynced={refreshCommercialAppointments} toast={showToast} canDelete={canDelete} canEdit={canEditAppointments} initialView={active==="Suivi commerciaux"||active==="Rendez-vous commerciaux"?"table":"week"}/> :
+       canViewActive&&(active==="Agenda commercial"||active==="Suivi commerciaux"||active==="Rendez-vous commerciaux") ? <CommercialAgendaView key={active} appointments={commercialAppointments} prospects={visibleProspects(opps)} linkProspects={rdvDirectory} clients={clients} billing={billing} installations={installations} commercials={commercials} query={query} currentUserId={currentProfile?.id} currentProfile={currentProfile} canAssignCommercial={canAssignCommercial||canDispatch} canReassignCommercial={canAssignCommercial||dispatcher} focusAppointmentId={agendaFocusId} focusAppointmentStart={agendaFocusStart} onFocusHandled={()=>{setAgendaFocusId("");setAgendaFocusStart("");}} onAddProspect={()=>setModal("prospect")} onCreateEvent={createAppointment} onUpdate={updateAppointment} onRemove={removeAppointment} onOpenProspect={prospect=>{if(prospect){setEditingProspect(stampProspectRdv(prospect, commercialAppointments));setModal("prospect");setActive("Prospects");}} } onOpenClient={row=>{const client=clients.find(item=>String(item.id)===String(row?.clientId));if(client) setBoardClient(client);}} onGoogleSynced={refreshCommercialAppointments} toast={showToast} canDelete={canDelete} canEdit={canEditAppointments} initialView={active==="Suivi commerciaux"||active==="Rendez-vous commerciaux"?"table":"week"}/> :
        canViewActive&&active==="Clients" ? <ClientsView clients={clients} articles={articles} billing={billing} closeRecordTick={closeClientRecordTick} onRecordOpen={setClientRecordOpen} contracts={contracts} visits={visits} installations={installations} pvProjects={pvProjects} thermalStudies={thermalStudies} pvSimulations={pvSimulations} query={query} canExport={canExport} canDelete={canDeleteClients} openClientId={openClientId} onOpenedClient={()=>setOpenClientId(null)} onExport={exportExcel} onImport={f=>importCsv(f,"client")} onAdd={()=>{setEditingClient(null);setModal("client");}} onEdit={canEditDirectory?client=>{setEditingClient(client);setModal("client");}:undefined} onCreateQuote={client=>{openDevisWizard({ client });}} onFinanceDecision={decideQuoteFinance} onSchedulePrevisit={scheduleClientPrevisit} onStartDocument={startClientDocument} appointments={commercialAppointments} prospects={mergeRdvProspects(opps, rdvDirectory)} currentProfile={currentProfile} currentUserId={currentProfile?.id} onUpdateAppointment={updateAppointment} onDelete={async client=>{if(!window.confirm(`Supprimer ${client.name} ?`))return;try{const response=await authFetch(`/api/clients/${client.id}`,{method:"DELETE"});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||"Suppression impossible");setClients(clients.filter(item=>item.id!==client.id));showToast("Client supprimé");}catch(error){showToast(String(error?.message||"Suppression impossible"));}}}/> :
        canViewActive&&active==="Maintenance" ? null :
        canViewActive&&active==="Parc automobile" ? <FleetModule query={query} toast={showToast} currentProfile={currentProfile}/> :
        canViewActive&&active==="Tickets internes" ? <InternalRequestsModule query={query} toast={showToast} focusId={requestFocus} onFocusConsumed={()=>setRequestFocus("")} onOpenClient={clientId=>{setOpenClientId(clientId);setActive("Clients");}}/> :
        canViewActive&&active==="SAV" ? <SavModule query={query} toast={showToast} onOpenClient={clientId=>{setOpenClientId(clientId);setActive("Clients");}}/> :
-       canViewActive&&active==="Planning" ? <InstallationPlanningView installations={installations} setInstallations={setInstallations} installationTeams={installationTeams} clients={clients} team={team} query={query} toast={showToast} mode="agenda" role={currentRole} commercials={commercials} canAssignCommercial={canAssignCommercial} onClientCreated={rememberClient}/> :
-       canViewActive&&active==="Chantiers" ? <InstallationPlanningView installations={installations} setInstallations={setInstallations} installationTeams={installationTeams} clients={clients} team={team} query={query} toast={showToast} mode="chantiers" role={currentRole} commercials={commercials} canAssignCommercial={canAssignCommercial} onClientCreated={rememberClient}/> :
+       canViewActive&&active==="Planning" ? <InstallationPlanningView installations={installations} setInstallations={setInstallations} installationTeams={installationTeams} clients={clients} team={team} query={query} toast={showToast} mode="agenda" role={currentRole} actorName={userName} commercials={commercials} canAssignCommercial={canAssignCommercial} onClientCreated={rememberClient}/> :
+       canViewActive&&active==="Chantiers" ? <InstallationPlanningView installations={installations} setInstallations={setInstallations} installationTeams={installationTeams} clients={clients} team={team} query={query} toast={showToast} mode="chantiers" role={currentRole} actorName={userName} commercials={commercials} canAssignCommercial={canAssignCommercial} onClientCreated={rememberClient} launchClient={installLaunch} onLaunchConsumed={()=>setInstallLaunch(null)}/> :
        canViewActive&&active==="Équipes d’installation" ? <InstallationTeamsView teams={installationTeams} setTeams={setInstallationTeams} users={team} setUsers={setTeam} query={query} toast={showToast}/> :
        canViewActive&&active==="Études thermiques" ? <ThermalStudiesView studies={thermalStudies} setStudies={setThermalStudies} query={query} toast={showToast} onCreate={()=>setPdfStudio({kind:"thermal",client:null,id:"",preset:null,token:Date.now()})} onOpen={study=>setPdfStudio({kind:"thermal",client:null,id:study.id,preset:null,token:Date.now()})}/> :
        canViewActive&&active==="Note de dimensionnement" ? <SizingNotesView studies={thermalStudies} setStudies={setThermalStudies} query={query} toast={showToast} onCreate={()=>setPdfStudio({kind:"sizing",client:null,id:"",preset:null,token:Date.now()})} onOpen={study=>setPdfStudio({kind:"sizing",client:null,id:study.id,preset:null,token:Date.now()})}/> :
@@ -2007,6 +2025,7 @@ export default function Home() {
     {pdfStudio&&<PdfStudio key={pdfStudio.token} studio={pdfStudio} clients={clients} studies={thermalStudies} onClose={()=>setPdfStudio(null)} onThermalSaved={record=>setThermalStudies(current=>[record,...current.filter(item=>String(item.id)!==String(record.id))])} onSizingSaved={record=>setThermalStudies(current=>[record,...current.filter(item=>String(item.id)!==String(record.id))])} onSimulationSaved={record=>setPvSimulations(current=>[record,...current.filter(item=>String(item.id)!==String(record.id))])} onVisitSaved={record=>setVisits(current=>[record,...current.filter(item=>String(item.id)!==String(record.id))])}/>}
     {quoteWizard&&<DevisWizard clients={clients} prospects={opps} documents={billing} articles={articles} brands={brands} catalogCategories={catalogCategories} catalogSubcategories={catalogSubcategories} bundles={bundles} commercials={commercials} currentProfile={currentProfile} currentUserId={currentProfile?.id} currentUserName={userName} mustAssignCommercial={mustAssignDevisCommercial(currentProfile)} canAssignCommercial={canAssignCommercial} canManageCatalog={canManageArticles(currentProfile)} canDeleteDraft={isAdminRole(currentRole)} onEnsureBundles={ensureOutdoorBundles} initialClient={quoteWizard.client} initialProspect={quoteWizard.prospect} resumeDocument={quoteWizard.resume} onClientCreated={rememberClient} onSaved={(document,meta)=>{if(meta?.deleted){setBilling(current=>current.filter(item=>item.id!==document.id));return;}if(meta?.client) rememberClient(meta.client);if(meta?.convertedProspectId) setOpps(current=>current.filter(item=>String(item.id)!==String(meta.convertedProspectId)));setBilling(current=>[document,...current.filter(item=>item.id!==document.id)]);}} onOpenDocument={()=>{setActive("Devis");setQuoteWizard(null);}} onDuplicate={duplicateQuote} onClose={()=>setQuoteWizard(null)} toast={showToast}/>}
     {invitation&&<InvitationModal user={invitation} close={()=>setInvitation(null)} toast={showToast}/>}
+    {chantierOffer&&<div className="backdrop" onMouseDown={event=>{if(event.target===event.currentTarget) setChantierOffer(null);}}><div className="modal" role="dialog" aria-modal="true" aria-label="Préparer le chantier"><button type="button" className="modal-close" onClick={()=>setChantierOffer(null)}><X size={18}/></button><div className="modal-icon"><HardHat/></div><h2>Préparer le chantier</h2><p>La commande de {chantierOffer.client.name} est signée. Le chantier n’est pas créé tant que vous ne l’enregistrez pas.</p><div className="modal-form-actions"><button type="button" onClick={()=>setChantierOffer(null)}>Plus tard</button><button type="button" className="primary" onClick={()=>{setInstallLaunch(chantierOffer.client);setActive("Chantiers");setChantierOffer(null);}}>Préparer le chantier</button></div></div></div>}
     {toast&&<div className="toast"><CheckCircle2 size={18}/>{toast}</div>}
   </main>;
 }
@@ -2245,7 +2264,7 @@ function Dashboard({filtered,contracts,quotes,navigate,selectedFamily=null,onSel
     {name:"Administration",icon:ReceiptText,color:"#79a214",sub:"Facturation et démarches",apps:[["Factures",ReceiptText,"Factures clients"],["Factures pro forma",BadgeEuro,"Pro forma"],["Photovoltaïque administratif",Zap,"Dossier solaire et étude d’installation"],["Maintenance",Wrench,"Contrats d’entretien"],["SAV",Phone,"Appels et dossiers SAV"],["Tickets internes",Inbox,"Tickets entre collègues"]]},
     {name:"Opérations",icon:HardHat,color:"#d84b3d",sub:"Terrain, équipes et planning",apps:[["Chantiers",HardHat,"Suivi des travaux"],["Planning",CalendarCheck,"Agenda des équipes"],["Équipes d’installation",Users,"Sous-traitants et équipes"],["Visites techniques",Eye,"Prévisites et validations"],["Maintenance",Wrench,"Rapports d’intervention"],["Parc automobile",Car,"Véhicules, conducteurs et coûts"],["SAV",Phone,"Appels et dossiers SAV"],["Tickets internes",Inbox,"Tickets entre collègues"]]},
     {name:"Catalogue",icon:Package,color:"#8d623b",sub:"Articles, groupes et fournisseurs",apps:[["Gestion des articles",Package,"Articles, tarifs et groupes"],["Grilles tarifaires PDF",FileSpreadsheet,"PDF PAC, fournitures et installation"],["Fournisseurs",Truck,"Annuaire fournisseurs"]]},
-    {name:"Pilotage",icon:TrendingUp,color:"#8f9395",sub:"Activité et indicateurs",apps:[["Vue d’ensemble",LayoutDashboard,"Tableau de bord"],["Prospects",TrendingUp,"Analyse du pipeline"],["Chantiers",HardHat,"Activité opérationnelle"]]},
+    {name:"Pilotage",icon:TrendingUp,color:"#8f9395",sub:"Activité et indicateurs",apps:[["Vue d’ensemble",LayoutDashboard,"Tableau de bord"],["Contrôle CA",Euro,"Chiffre d’affaires des commandes signées"],["Prospects",TrendingUp,"Analyse du pipeline"],["Chantiers",HardHat,"Activité opérationnelle"]]},
     {name:"Configuration",icon:ShieldCheck,color:"#4b5d84",sub:"Équipe et droits d’accès",apps:[["Utilisateurs",ShieldCheck,"Comptes et autorisations"],["Entreprise",Landmark,"SIRET, téléphone et mentions légales"],["Journal d’activités",ScrollText,"Traçabilité réservée à l’Admin VIP"]]},
   ].map(family=>({...family,apps:family.apps.filter(([label])=>isVipOnlyNav(label)?adminVip:canAccessWorkspace(allowedModules,label,currentProfile)||(label==="Parc automobile"&&fleetDriver))})).filter(family=>family.apps.length>0);
   const visibleFamilies=homeFamiliesForRole(families, currentProfile?.role);
@@ -2300,7 +2319,7 @@ function ProspectsView({prospects,appointments,query,onAdd,onEdit,onCreateQuote,
       toast(String(error?.message||"Planification impossible"));
     }
   }
-  return <><ModuleTop eyebrow="CONFIDENTIEL" title="Prospects" sub={fieldWindow?`${sheetLabel} — modifiable pendant 30 minutes après la création`:consultOnly?`${sheetLabel} — consultation du statut, sans modification`:sheetTab==="contacts"?`${sheetLabel} — elles rejoignent les prospects dès que le statut avance`:`${sheetLabel} — un devis ou une facture les fait passer clients`}><button className="primary" onClick={onAdd}><Plus size={17}/>Créer un prospect</button><div className="data-panel secure-list prospect-table is-rdv-status" onContextMenu={e=>e.preventDefault()}><div className="requests-tabs prospect-sheet-tabs" role="tablist"><button type="button" className={sheetTab==="prospects"?"active":""} onClick={()=>setSheetTab("prospects")}>Prospects ({prospectCount})</button><button type="button" className={sheetTab==="contacts"?"active":""} onClick={()=>setSheetTab("contacts")}>Contacts ({contactCount})</button></div><div className="directory-filters"><DirectoryListSearch value={textQuery} onChange={setTextQuery}/><label>Commercial<select value={commercialFilter} onChange={e=>setCommercialFilter(e.target.value)}><option value="">Tous</option><option value="unassigned">Non affecté</option>{commercialChoices.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Prospecteur<select value={prospectorFilter} onChange={e=>setProspectorFilter(e.target.value)}><option value="">Tous</option><option value="unassigned">Non renseigné</option>{prospectorChoices.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Origine<select value={originFilter} onChange={e=>setOriginFilter(e.target.value)}><option value="">Toutes</option>{originChoices.map(item=><option key={item.key} value={item.key}>{item.label}</option>)}</select></label><label>Date<input type="date" value={dateFilter} onChange={e=>setDateFilter(e.target.value)}/></label></div>{!list.length&&<div className="quote-empty">{sheetTab==="contacts"?"Aucune fiche contact pour cette recherche.":"Aucun prospect pour cette recherche."}</div>}<div className="data-row data-head"><span>N° prospect</span><span>PROSPECT</span><span>COORDONNÉES</span><span>ADRESSE / PROJET</span><span>ORIGINE</span><span>ÉTAPE</span><span>STATUT RDV</span><span>QUAND</span><span>COMMERCIAL</span><span>PROSPECTEUR</span><span>ACTIONS</span></div>{list.map((p,i)=>{const planned=appointments.find(item=>item.prospectId===p.id);const rdvStatus=latestRdvStatusForProspect(p.id,appointments)||p.rdvStatus;return <div className="data-row" key={p.id||`${p.name}-${i}`}><span className="client-number-cell"><CopyNumber value={formatProspectNumber(p.prospectNumber)}/></span><b>{p.name}</b><span><b>{p.phone||"Téléphone à compléter"}</b><small>{p.email}</small></span><span><b>{p.address||p.city||"Adresse à compléter"}</b><small>{[p.postalCode,p.city].filter(Boolean).join(" ")}{p.type?` · ${p.type}`:""}</small></span><ProspectOriginCell prospect={p}/><span className="status wait">{p.stage}</span><span className={`status ${rdvStatusTone(rdvStatus)}`}>{displayRdvStatus(rdvStatus)}</span><span><b>{formatProspectWhen(planned?.start||p.desiredAt)}</b><small>{(planned?.kind||p.desiredKind)==="rappel"?"Fiche contact":(planned?.start||p.desiredAt)?"Rendez-vous":""}</small></span><span><b>{p.owner||"Non affecté"}</b></span><span><b>{p.prospector||"Non renseigné"}</b></span><div className="prospect-actions">{!consultOnly&&canCreateQuote&&onCreateQuote&&<button className="edit-user" onClick={()=>onCreateQuote(p)} title="Créer un devis"><FileText size={15}/></button>}<button className="edit-user" onClick={()=>onEdit(p)} title={(canReviseRow?!canReviseRow(p):consultOnly)?"Consulter la fiche":"Modifier la fiche prospect"}>{(canReviseRow?!canReviseRow(p):consultOnly)?<Eye size={15}/>:<Pencil size={15}/>}</button>{canPlan&&<button className={planned?"agenda-planned":"agenda-add"} onClick={()=>setPlanning(p)}><CalendarDays size={15}/>{planned?"Replanifier":"Planifier"}</button>}{canDelete&&<button type="button" className="trash" onClick={()=>onDelete?.(p)} title="Supprimer le prospect"><Trash2 size={15}/></button>}</div></div>})}</div></ModuleTop>{planning&&<div className="backdrop"><div className="modal commercial-planning-modal"><button className="modal-close" onClick={()=>setPlanning(null)}><X/></button><div className="modal-icon"><CalendarDays/></div><h2>Planifier le rendez-vous</h2><p>{planning.name} — {[planning.address,planning.postalCode,planning.city].filter(Boolean).join(" ")||planning.city}</p><form onSubmit={schedule}><label>Date et heure<input name="start" type="datetime-local" required/></label><div className="form-row"><label>Durée<select name="duration"><option value="30">30 minutes</option><option value="60">1 heure</option><option value="90">1 h 30</option><option value="120">2 heures</option></select></label><label>Type de rendez-vous<select name="appointmentType"><option>Visite commerciale</option><option>Appel téléphonique</option><option>Visioconférence</option><option>Relance</option></select></label></div><label>Consignes<textarea name="notes" rows="3" placeholder="Besoins du prospect, documents à prévoir…"/></label><button className="primary submit" type="submit"><CalendarDays size={17}/>Ajouter à l’agenda</button></form></div></div>}</>;
+  return <><ModuleTop eyebrow="CONFIDENTIEL" title="Prospects" sub={fieldWindow?`${sheetLabel} — modifiable pendant 30 minutes après la création`:consultOnly?`${sheetLabel} — consultation du statut, sans modification`:sheetTab==="contacts"?`${sheetLabel} — elles rejoignent les prospects dès que le statut avance`:`${sheetLabel} — un devis ou une facture les fait passer clients`}><button className="primary" onClick={onAdd}><Plus size={17}/>Créer un prospect</button><div className="data-panel secure-list prospect-table is-rdv-status" onContextMenu={e=>e.preventDefault()}><div className="requests-tabs prospect-sheet-tabs" role="tablist"><button type="button" className={sheetTab==="prospects"?"active":""} onClick={()=>setSheetTab("prospects")}>Prospects ({prospectCount})</button><button type="button" className={sheetTab==="contacts"?"active":""} onClick={()=>setSheetTab("contacts")}>Contacts ({contactCount})</button></div><div className="directory-filters"><DirectoryListSearch value={textQuery} onChange={setTextQuery}/><label>Commercial<select value={commercialFilter} onChange={e=>setCommercialFilter(e.target.value)}><option value="">Tous</option><option value="unassigned">Non affecté</option>{commercialChoices.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Prospecteur<select value={prospectorFilter} onChange={e=>setProspectorFilter(e.target.value)}><option value="">Tous</option><option value="unassigned">Non renseigné</option>{prospectorChoices.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Origine<select value={originFilter} onChange={e=>setOriginFilter(e.target.value)}><option value="">Toutes</option>{originChoices.map(item=><option key={item.key} value={item.key}>{item.label}</option>)}</select></label><label>Date<input type="date" value={dateFilter} onChange={e=>setDateFilter(e.target.value)}/></label></div>{!list.length&&<div className="quote-empty">{sheetTab==="contacts"?"Aucune fiche contact pour cette recherche.":"Aucun prospect pour cette recherche."}</div>}<div className="data-row data-head"><span>N° prospect</span><span>PROSPECT</span><span>COORDONNÉES</span><span>ADRESSE / PROJET</span><span>ORIGINE</span><span>ÉTAPE</span><span>STATUT RDV</span><span>QUAND</span><span>COMMERCIAL</span><span>PROSPECTEUR</span><span>ACTIONS</span></div>{list.map((p,i)=>{const planned=appointments.find(item=>item.prospectId===p.id);const rdvStatus=latestRdvStatusForProspect(p.id,appointments)||p.rdvStatus;return <div className="data-row" key={p.id||`${p.name}-${i}`}><span className="client-number-cell"><CopyNumber value={formatProspectNumber(p.prospectNumber)}/></span><b>{p.name}</b><span><b>{p.phone||"Téléphone à compléter"}</b><small>{p.email}</small></span><span><b>{p.address||p.city||"Adresse à compléter"}</b><small>{[p.postalCode,p.city].filter(Boolean).join(" ")}{p.type?` · ${p.type}`:""}</small></span><ProspectOriginCell prospect={p}/><span className={`status ${p.stage==="NRP"?"nrp":"wait"}`} title={p.stage==="NRP"?"Ne répond pas":undefined}>{p.stage==="NRP"?"NRP":p.stage}</span><span className={`status ${rdvStatusTone(rdvStatus)}`}>{displayRdvStatus(rdvStatus)}</span><span><b>{formatProspectWhen(planned?.start||p.desiredAt)}</b><small>{(planned?.kind||p.desiredKind)==="rappel"?"Fiche contact":(planned?.start||p.desiredAt)?"Rendez-vous":""}</small></span><span><b>{p.owner||"Non affecté"}</b></span><span><b>{p.prospector||"Non renseigné"}</b></span><div className="prospect-actions">{!consultOnly&&canCreateQuote&&onCreateQuote&&<button className="edit-user" onClick={()=>onCreateQuote(p)} title="Créer un devis"><FileText size={15}/></button>}<button className="edit-user" onClick={()=>onEdit(p)} title={(canReviseRow?!canReviseRow(p):consultOnly)?"Consulter la fiche":"Modifier la fiche prospect"}>{(canReviseRow?!canReviseRow(p):consultOnly)?<Eye size={15}/>:<Pencil size={15}/>}</button>{canPlan&&<button className={planned?"agenda-planned":"agenda-add"} onClick={()=>setPlanning(p)}><CalendarDays size={15}/>{planned?"Replanifier":"Planifier"}</button>}{canDelete&&<button type="button" className="trash" onClick={()=>onDelete?.(p)} title="Supprimer le prospect"><Trash2 size={15}/></button>}</div></div>})}</div></ModuleTop>{planning&&<div className="backdrop"><div className="modal commercial-planning-modal"><button className="modal-close" onClick={()=>setPlanning(null)}><X/></button><div className="modal-icon"><CalendarDays/></div><h2>Planifier le rendez-vous</h2><p>{planning.name} — {[planning.address,planning.postalCode,planning.city].filter(Boolean).join(" ")||planning.city}</p><form onSubmit={schedule}><label>Date et heure<input name="start" type="datetime-local" required/></label><div className="form-row"><label>Durée<select name="duration"><option value="30">30 minutes</option><option value="60">1 heure</option><option value="90">1 h 30</option><option value="120">2 heures</option></select></label><label>Type de rendez-vous<select name="appointmentType"><option>Visite commerciale</option><option>Appel téléphonique</option><option>Visioconférence</option><option>Relance</option></select></label></div><label>Consignes<textarea name="notes" rows="3" placeholder="Besoins du prospect, documents à prévoir…"/></label><button className="primary submit" type="submit"><CalendarDays size={17}/>Ajouter à l’agenda</button></form></div></div>}</>;
 }
 
 function sameClient(doc,client) {
@@ -3127,12 +3146,13 @@ function installationLocalInput(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function InstallationPlanningView({installations,setInstallations,installationTeams,clients,team,query,toast,mode,role,commercials=[],canAssignCommercial=false,onClientCreated}) {
+function InstallationPlanningView({installations,setInstallations,installationTeams,clients,team,query,toast,mode,role,actorName="",commercials=[],canAssignCommercial=false,onClientCreated,launchClient=null,onLaunchConsumed}) {
   const [showForm,setShowForm]=useState(false);
   const [editing,setEditing]=useState(null);
   const canEdit=canEditInstallation(role);
   const canWriteFinance=canWriteInstallationFinance(role);
   const canReadFinance=canReadInstallationFinance(role);
+  const canReadMoney=canReadInstallationMoneyTotals(role);
   const salespeople=installationSalespeople(team);
   const [financeDraft,setFinanceDraft]=useState(emptyInstallationFinance);
   const [financeLoaded,setFinanceLoaded]=useState(true);
@@ -3149,7 +3169,7 @@ function InstallationPlanningView({installations,setInstallations,installationTe
   const contractors=installationTeams.filter(item=>isSubcontractor(item)&&item.status!=="Inactive");
   const crews=installationTeams.filter(item=>!isSubcontractor(item)&&item.status!=="Inactive");
   const assignable=[...crews,...contractors];
-  const list=installations.filter(item=>Object.values(item).flat().join(" ").toLowerCase().includes(query.toLowerCase())).sort((a,b)=>new Date(a.start)-new Date(b.start));
+  const list=installations.filter(item=>Object.values(item).flat().join(" ").toLowerCase().includes(query.toLowerCase())).sort(compareInstallationsRecent);
   const {week,boards,shiftWeek}=installationBoards(list,installationTeams,weekAnchor);
   const dayLabel=value=>new Date(value).toLocaleDateString("fr-FR",{weekday:"short",day:"2-digit",month:"short"});
   const timeLabel=value=>new Date(value).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
@@ -3158,6 +3178,13 @@ function InstallationPlanningView({installations,setInstallations,installationTe
   const today=new Date();
   const todayIso=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
   const financeInForm=canWriteFinance&&(!editing||canReadFinance);
+  useEffect(()=>{
+    if(!launchClient) return;
+    setEditing(null);
+    setPickedClient(launchClient);
+    setShowForm(true);
+    onLaunchConsumed?.();
+  },[launchClient]);
   useEffect(()=>{
     if(mode==="agenda"||!canReadFinance) return undefined;
     let cancelled=false;
@@ -3193,7 +3220,7 @@ function InstallationPlanningView({installations,setInstallations,installationTe
     if(!chosen.length) return toast("Choisissez au moins une équipe ou un sous-traitant");
     if(financeInForm&&editing&&canReadFinance&&!financeLoaded) return toast("Les montants sont encore en cours de chargement.");
     const assignees=chosen.map(item=>({id:item.id,name:item.name,kind:isSubcontractor(item)?"sous-traitant":"equipe",specialty:item.specialty||""}));
-    const installation=stripInstallationFinance({...(editing||{}),...d,id:editing?.id||Date.now(),installers:selectedInstallers,assignees,checks:installationChecksFromForm(d),contractorId:assignees[0].id,contractorName:assignees.map(item=>item.name).join(" · "),teamId:assignees[0].id,status:editing?.status||"Planifié",created:editing?.created||new Date().toISOString()});
+    const installation=stripInstallationFinance({...(editing||{}),...d,id:editing?.id||Date.now(),installers:selectedInstallers,assignees,checks:installationChecksFromForm(d,{previous:editing?.checks||{},actorName}),contractorId:assignees[0].id,contractorName:assignees.map(item=>item.name).join(" · "),teamId:assignees[0].id,status:editing?.status||"Planifié",created:editing?.created||new Date().toISOString()});
     if(financeInForm) {
       const financeError=await saveFinance(installation.id,financeDraft);
       if(financeError) return toast(financeError);
@@ -3264,14 +3291,24 @@ function InstallationPlanningView({installations,setInstallations,installationTe
     if(response.ok&&data.finance) setViewFinance(data.finance);
   }
   function CheckDots({item}) {
-    return <span className="contractor-pills install-checks" aria-label="Préparation du chantier">{INSTALLATION_CHECKS.map(check=>{const state=installationCheckValue(item,check.id);const mark=state==="oui"?"is-ready":state==="pb"?"is-pb":"";return <span key={check.id} title={`${check.label} : ${installationCheckLabel(state)}`} aria-label={`${check.label} : ${installationCheckLabel(state)}`}><i className={mark}/></span>;})}</span>;
+    return <span className="contractor-pills install-checks" aria-label="Préparation du chantier">{INSTALLATION_CHECKS.map(check=>{const state=installationCheckValue(item,check.id);const stamp=installationCheckStamp(item,check.id);const mark=state==="oui"?"is-ready":state==="pb"?"is-pb":"";const who=state==="oui"?stamp.initials:"";return <span key={check.id} title={`${check.label} : ${installationCheckLabel(state)}${stamp.by?` · ${stamp.by}`:""}`} aria-label={`${check.label} : ${installationCheckLabel(state)}${who?` ${who}`:""}`}><i className={`install-check-square ${mark}`}>{who}</i></span>;})}</span>;
+  }
+  function AlertBell({item}) {
+    if (!installationAlertsWithinWeek(item, todayIso)) return null;
+    return <span className="install-alert-bell" title="Il reste une semaine ou moins, et la préparation n’est pas au vert" aria-label="Préparation incomplète"><Bell size={16}/></span>;
   }
   const openList=list.filter(item=>!isFinishedInstallation(item));
   const doneList=list.filter(item=>isFinishedInstallation(item));
   const visibleList=installPane==="termines"?doneList:openList;
+  const money=canReadMoney?installationMoneyTotals(installations,financeById,todayIso):null;
+  const moneyLabel=cents=>formatEuroFromCents(cents)||"0,00 €";
   return <ModuleTop eyebrow="INSTALLATIONS & ÉQUIPES" title={mode==="agenda"?"Planning des installations":"Chantiers d’installation"} sub={mode==="agenda"?`${boards.length} tableau${boards.length>1?"x":""} cette semaine`:`${openList.length} chantier${openList.length>1?"s":""} en cours`}>
     <button className="primary" onClick={()=>{if(!assignable.length)return toast("Créez d’abord une équipe ou un sous-traitant dans Équipes d’installation");setEditing(null);setAssigneeIds([]);setSelectedInstallers([]);setPickedClient(null);setFinanceDraft(emptyInstallationFinance());setFinanceLoaded(true);setShowForm(true);}}><Plus size={17}/>Programmer une installation</button>
     <div className="install-planning">
+    {mode!=="agenda"&&money&&<div className="install-money">
+      <div><small>Semaine en cours</small><b>{moneyLabel(money.weekCents)}</b></div>
+      <div><small>Mois en cours</small><b>{moneyLabel(money.monthCents)}</b></div>
+    </div>}
     <div className={`planning-summary${mode==="agenda"?" is-present":""}`}>
       <div><CalendarCheck/><span><b>{list.filter(item=>item.status==="Planifié").length}</b>à venir</span></div>
       <div><HardHat/><span><b>{list.filter(item=>item.status==="En cours").length}</b>en cours</span></div>
@@ -3302,7 +3339,7 @@ function InstallationPlanningView({installations,setInstallations,installationTe
             {board.columns.map(column=><section key={column.day} className={column.day===todayIso?"is-today":""}>
               <h3>{columnLabel(column.day)}</h3>
               {column.items.map(item=><button type="button" className={`install-job is-${String(item.status||"Planifié").toLowerCase().replace("é","e").replace(" ","-")}`} key={item.id} onClick={()=>openView(item)} aria-label={`Consulter ${item.project}`}>
-                <strong>{item.project}</strong>
+                <strong>{item.project}<AlertBell item={item}/></strong>
                 <span>{timeLabel(item.start)} – {timeLabel(item.end)}</span>
                 <span>{item.client}</span>
                 <span>{item.address||"Adresse à compléter"}</span>
@@ -3322,7 +3359,7 @@ function InstallationPlanningView({installations,setInstallations,installationTe
       {visibleList.length===0&&<div className="empty">{installPane==="termines"?"Aucun chantier terminé.":"Aucun chantier en cours."}</div>}
       {visibleList.map(item=><article className="installation-card" key={item.id}>
         <div className="installation-date"><b>{dayLabel(item.start)}</b><span>{timeLabel(item.start)} — {timeLabel(item.end)}</span></div>
-        <div className="installation-detail"><span className="installation-status">{item.status}</span><h3>{item.project}</h3><p><Building2 size={13}/>{item.client}</p><p><MapPin size={13}/>{item.address||"Adresse à compléter"}</p><p>{installationAssigneeLabel(item)||"Équipe à choisir"}</p><CheckDots item={item}/>{canReadFinance&&<InstallationFinanceSummary finance={financeById[String(item.id)]}/>}{item.notes&&<small>{item.notes}</small>}</div>
+        <div className="installation-detail"><span className="installation-status">{item.status}</span><h3>{item.project}<AlertBell item={item}/></h3><p><Building2 size={13}/>{item.client}</p><p><MapPin size={13}/>{item.address||"Adresse à compléter"}</p><p>{installationAssigneeLabel(item)||"Équipe à choisir"}</p><CheckDots item={item}/>{canReadFinance&&<InstallationFinanceSummary finance={financeById[String(item.id)]}/>}{item.notes&&<small>{item.notes}</small>}</div>
         <div className="installation-team"><b>{installationAssigneeLabel(item)||"ÉQUIPES"}</b>{(item.installers||[]).map(name=><span key={name}><i>{name[0]}</i>{name}</span>)}</div>
         <div className="installation-actions"><select value={item.status} onChange={event=>updateStatus(item,event.target.value)}><option>Planifié</option><option>En cours</option><option>Terminé</option><option>Reporté</option></select>{canWriteFinance&&!canReadFinance&&<button type="button" className="install-edit" onClick={()=>{setFinanceTarget(item);setFinanceDraft(emptyInstallationFinance());}}>Saisir les montants</button>}{canEdit&&<button type="button" className="install-edit" onClick={()=>openEdit(item)}><Pencil size={14}/>Modifier</button>}<button onClick={()=>remove(item)} title="Supprimer du chantier et des agendas"><Trash2 size={16}/></button></div>
       </article>)}
@@ -3338,7 +3375,7 @@ function InstallationPlanningView({installations,setInstallations,installationTe
         {(viewing.installers||[]).length>0&&<div><dt>Techniciens</dt><dd>{viewing.installers.join(", ")}</dd></div>}
         {viewing.notes&&<div><dt>Consignes</dt><dd>{viewing.notes}</dd></div>}
       </dl>
-      <div className="install-checks-form install-view-checks"><b>Préparation du chantier</b>{INSTALLATION_CHECKS.map(check=>{const state=installationCheckValue(viewing,check.id);return <p key={check.id}><span>{check.label}</span><i className={state==="oui"?"is-ready":state==="pb"?"is-pb":""} aria-hidden="true"/><em className={`is-${state}`}>{installationCheckLabel(state)}</em></p>;})}</div>
+      <div className="install-checks-form install-view-checks"><b>Préparation du chantier</b>{INSTALLATION_CHECKS.map(check=>{const state=installationCheckValue(viewing,check.id);const stamp=installationCheckStamp(viewing,check.id);return <p key={check.id}><span>{check.label}</span><i className={`install-check-square ${state==="oui"?"is-ready":state==="pb"?"is-pb":""}`} aria-hidden="true">{state==="oui"?stamp.initials:""}</i><em className={`is-${state}`}>{installationCheckLabel(state)}{stamp.by?` · ${stamp.by}`:""}</em></p>;})}</div>
       {canReadFinance&&<InstallationFinanceSummary finance={viewFinance}/>}
       <button className="secondary submit" type="button" onClick={()=>setViewing(null)}>Fermer</button>
     </div></div>}
@@ -3351,7 +3388,7 @@ function InstallationPlanningView({installations,setInstallations,installationTe
       <div className="installer-picker"><b>Équipes et sous-traitants</b><span>Plusieurs choix possibles : climatisation, pompe à chaleur, isolation…</span>{crews.map(item=><label key={item.id} className={assigneeIds.includes(String(item.id))?"selected":""}><input type="checkbox" checked={assigneeIds.includes(String(item.id))} onChange={()=>setAssigneeIds(current=>current.includes(String(item.id))?current.filter(id=>id!==String(item.id)):[...current,String(item.id)])}/><i>{item.name?.[0]||"É"}</i><span><b>{item.name}</b><small>Équipe interne</small></span><CheckCircle2 size={16}/></label>)}{contractors.map(item=><label key={item.id} className={assigneeIds.includes(String(item.id))?"selected":""}><input type="checkbox" checked={assigneeIds.includes(String(item.id))} onChange={()=>setAssigneeIds(current=>current.includes(String(item.id))?current.filter(id=>id!==String(item.id)):[...current,String(item.id)])}/><i>{item.name?.[0]||"S"}</i><span><b>{item.name}</b><small>{item.specialty||"Sous-traitant"}</small></span><CheckCircle2 size={16}/></label>)}</div>
       <div className="installer-picker"><b>Techniciens internes</b><span>Facultatif, en plus du sous-traitant</span>{installers.map(installer=><label key={installer.id} className={selectedInstallers.includes(installer.name)?"selected":""}><input type="checkbox" checked={selectedInstallers.includes(installer.name)} onChange={()=>setSelectedInstallers(selectedInstallers.includes(installer.name)?selectedInstallers.filter(name=>name!==installer.name):[...selectedInstallers,installer.name])}/><i>{installer.name[0]}</i><span><b>{installer.name}</b><small>{installer.role}</small></span><CheckCircle2 size={16}/></label>)}</div>
       <label>Consignes pour l’équipe<textarea name="notes" rows="3" placeholder="Matériel, accès, contact sur place…" defaultValue={editing?.notes||""}/></label>
-      {financeInForm&&<InstallationFinanceFields salespeople={salespeople} value={financeDraft} onChange={setFinanceDraft} hint={canReadFinance&&editing?"Ces montants sont réservés à l’admin VIP et au superadmin.":"Ces montants sont confidentiels. Après l’enregistrement, ils ne restent visibles que pour l’admin VIP et le superadmin."}/>}
+      {financeInForm&&<InstallationFinanceFields salespeople={salespeople} value={financeDraft} onChange={setFinanceDraft} hint={canReadFinance?"Le prix de vente et le prix de revient restent visibles pour le secrétariat.":"Ces montants sont confidentiels. Après l’enregistrement, ils ne restent visibles que pour l’admin VIP, le superadmin et le secrétariat."}/>}
       <button className="primary submit" type="submit"><Plus size={17}/>{editing?"Enregistrer le chantier":"Créer le chantier et les agendas"}</button>
     </form></div></div>}
     {financeTarget&&<div className="backdrop"><div className="modal installation-modal"><button className="modal-close" onClick={()=>{setFinanceTarget(null);setFinanceDraft(emptyInstallationFinance());}}><X size={18}/></button><div className="modal-icon"><CalendarCheck/></div><h2>Montants du chantier</h2><p>Le formulaire n’affiche pas les montants déjà enregistrés. Enregistrer les remplace.</p><form onSubmit={saveConfidential}>
@@ -3688,6 +3725,7 @@ function CategoryFields({groups}) {
 }
 function UserFields({team,user,actorRole}) {
   const actorIsVip=isAdminVip(actorRole);
+  const actorIsAdmin=actorIsVip||normalizeRoleLabel(actorRole)==="Superadmin";
   const [role,setRole]=useState(()=>normalizeRoleLabel(user?.role||"Commercial"));
   const [allowed,setAllowed]=useState(()=>sanitizeGrantedModules(user?.modules||roleDefaults[user?.role]||roleDefaults.Commercial,{role:user?.role}));
   const exclusiveFunctions=ACTION_PERMISSIONS.filter(item=>item.exclusive);
@@ -3708,7 +3746,19 @@ function UserFields({team,user,actorRole}) {
     setRole(nextRole);
     const next=nextRole==="Admin VIP"?accessModules:(roleDefaults[nextRole]||[]);
     setAllowed(["Admin VIP","Superadmin"].includes(nextRole)?next:next.filter(module=>module!=="Utilisateurs"));
-    setAllowedActions(nextRole==="Admin VIP"?exclusiveFunctions.map(item=>item.code):[]);
+    setAllowedActions(current=>{
+      const keepSignature=current.includes(SIGNED_QUOTE_VALIDATION)?[SIGNED_QUOTE_VALIDATION]:[];
+      if(nextRole==="Admin VIP") return [...new Set([...exclusiveFunctions.map(item=>item.code),...keepSignature])];
+      return keepSignature;
+    });
+  }
+  function submittedActions(){
+    if(isVipUser) return exclusiveFunctions.map(item=>item.code);
+    const stored=extractGrantedActions(user?.actions||user?.modules);
+    const exclusiveCodes=exclusiveFunctions.map(item=>item.code);
+    const exclusiveKept=actorIsVip?allowedActions.filter(code=>exclusiveCodes.includes(code)):stored.filter(code=>exclusiveCodes.includes(code));
+    const signature=allowedActions.includes(SIGNED_QUOTE_VALIDATION)?[SIGNED_QUOTE_VALIDATION]:[];
+    return [...new Set([...exclusiveKept,...signature])];
   }
   function toggleModule(module) {
     if(isVipUser|| (module==="Utilisateurs"&&!isAdminUser)) return;
@@ -3720,10 +3770,11 @@ function UserFields({team,user,actorRole}) {
     <label>Adresse email (identifiant de connexion)<input type="email" name="email" required defaultValue={user?.email||""}/></label>
     {user&&<p className="user-email-hint">Si vous corrigez l’email, l’identifiant de connexion change. Envoyez ensuite le mail depuis le listing.</p>}
     <label>Catégorie d’utilisateur<select name="role" value={role} onChange={e=>applyRole(e.target.value)}>{roleOptions.map(r=><option key={r}>{r}</option>)}</select></label>
-    <div className="module-access"><div className="module-access-head"><div><b>Accès aux modules</b><span>{isVipUser?"L’Admin VIP a tous les droits, sur toutes les applications.":"Le rôle préremplit les cases. Seules les cases cochées donnent réellement accès."}</span></div>{!isVipUser&&<button type="button" onClick={()=>setAllowed(allowed.length===selectableModules.length?[]:selectableModules)}>{allowed.length===selectableModules.length?"Tout retirer":"Tout sélectionner"}</button>}</div><div className="module-checks">{accessModules.map(module=>{const locked=isVipUser||(module==="Utilisateurs"&&!isAdminUser);return <label key={module} className={`${(isVipUser||allowed.includes(module))?"checked":""}${locked?" is-locked":""}`}><input type="checkbox" checked={isVipUser||allowed.includes(module)} disabled={locked} onChange={()=>toggleModule(module)}/><CheckCircle2 size={15}/><span>{module}</span></label>;})}</div></div>
+    <div className="module-access"><div className="module-access-head"><div><b>Accès aux modules</b><span>{isVipUser?"L’Admin VIP a tous les droits, sur toutes les applications.":"Le rôle préremplit les cases. Seules les cases cochées donnent réellement accès."}</span></div>{!isVipUser&&<button type="button" onClick={()=>setAllowed(allowed.length===selectableModules.length?[]:selectableModules)}>{allowed.length===selectableModules.length?"Tout retirer":"Tout sélectionner"}</button>}</div><div className="module-checks">{accessModules.map(module=>{const locked=isVipUser||(module==="Utilisateurs"&&!isAdminUser);return <label key={module} className={`${(isVipUser||allowed.includes(module))?"checked":""}${locked?" is-locked":""}`}><input type="checkbox" checked={isVipUser||allowed.includes(module)} disabled={locked} onChange={()=>toggleModule(module)}/><CheckCircle2 size={15}/><span>{workspaceTitle(module)}</span></label>;})}</div></div>
     {actorIsVip&&<div className="module-access"><div className="module-access-head"><div><b>Fonctions spéciales</b><span>{isVipUser?"Incluses automatiquement pour l’Admin VIP.":"Cases exclusives, indépendantes du rôle et des modules. Sans case cochée, le bouton n’apparaît pas."}</span></div></div><div className="module-checks">{exclusiveFunctions.map(item=>{const checked=isVipUser||allowedActions.includes(item.code);return <label key={item.code} className={checked?"checked":""}><input type="checkbox" checked={checked} disabled={isVipUser} onChange={()=>setAllowedActions(current=>current.includes(item.code)?current.filter(code=>code!==item.code):[...current,item.code])}/><CheckCircle2 size={15}/><span>{item.label}</span></label>;})}</div></div>}
+    {actorIsAdmin&&<div className="module-access"><div className="module-access-head"><div><b>Validation des devis signés</b><span>{isVipUser?"Incluse pour l’Admin VIP.":"Le Superadmin et l’Admin VIP peuvent accorder ou retirer cette case sans changer le rôle."}</span></div></div><div className="module-checks"><label className={isVipUser||allowedActions.includes(SIGNED_QUOTE_VALIDATION)?"checked":""}><input type="checkbox" checked={isVipUser||allowedActions.includes(SIGNED_QUOTE_VALIDATION)} disabled={isVipUser} onChange={()=>setAllowedActions(current=>current.includes(SIGNED_QUOTE_VALIDATION)?current.filter(code=>code!==SIGNED_QUOTE_VALIDATION):[...current,SIGNED_QUOTE_VALIDATION])}/><CheckCircle2 size={15}/><span>Valider les devis signés</span></label></div></div>}
     <input type="hidden" name="modules" value={JSON.stringify(isVipUser?accessModules:allowed)}/>
-    <input type="hidden" name="actions" value={JSON.stringify(isVipUser?exclusiveFunctions.map(item=>item.code):actorIsVip?allowedActions:extractGrantedActions(user?.actions||user?.modules))}/>
+    <input type="hidden" name="actions" value={JSON.stringify(submittedActions())}/>
     <label>Responsable hiérarchique<select name="manager" required={needsCommercial||needsTechnical||needsFieldProspector} defaultValue={user?.manager||undefined}>{!needsCommercial&&!needsTechnical&&!needsFieldProspector&&<option value="Direction">Direction / non applicable</option>}{managers.filter(u=>u.id!==user?.id).map(u=><option value={u.name} key={u.id}>{u.name} — {u.role}</option>)}</select></label>
     {needsCommercial&&commercialManagers.length===0&&<div className="access-warning">Créez d’abord un Responsable commercial ou un Admin VIP.</div>}
     {needsFieldProspector&&fieldManagers.length===0&&<div className="access-warning">Créez d’abord un Responsable prospection ou un Admin VIP.</div>}
@@ -3803,6 +3854,11 @@ function BillingFields({clients,prospects=[],documents=[],articles,brands=[],cat
   const [representativeFirstName,setRepresentativeFirstName]=useState(defaultRep.firstName);
   const [representativeLastName,setRepresentativeLastName]=useState(defaultRep.lastName);
   const [representativeSignature,setRepresentativeSignature]=useState(document?.representativeSignature||"");
+  const [siteDifferent,setSiteDifferent]=useState(Boolean(document?.siteDifferent));
+  const [siteAddress,setSiteAddress]=useState(document?.siteAddress||"");
+  const [siteComplement,setSiteComplement]=useState(document?.siteComplement||"");
+  const [sitePostalCode,setSitePostalCode]=useState(document?.sitePostalCode||"");
+  const [siteCity,setSiteCity]=useState(document?.siteCity||"");
   const quoteItems=filledQuoteItems(items);
   const totals=billingTotals({items:quoteItems,tax,globalDiscountType,globalDiscountValue});
   const isPhotovoltaic=quoteItems.some(item=>`${item.name||""} ${item.category||""} ${item.subcategory||""} ${item.code||""}`.toLowerCase().includes("photovolta"));
@@ -3934,6 +3990,20 @@ function BillingFields({clients,prospects=[],documents=[],articles,brands=[],cat
       <input type="hidden" name="client" value={selectedClient.company||selectedClient.name||""}/>
       {!directoryItems.length?<div className="quote-client-preview empty"><Building2 size={18}/><span><b>Aucun destinataire disponible</b><em>Créez un client depuis le bouton ci-dessus, ou une fiche prospect.</em></span></div>:!selectedClientId?<div className="quote-client-preview empty"><Building2 size={18}/><span><b>Aucun destinataire sélectionné</b><em>Recherchez une fiche par nom, prénom ou adresse, ou créez un client.</em></span></div>:null}
     </section>
+    {kind==="Devis"&&<section className="quote-section">
+      <header className="quote-section-head"><span><Building2 size={14}/></span><div><b>Adresse de chantier</b><em>Uniquement si le chantier n’est pas à l’adresse du client</em></div></header>
+      <label className="client-consent">
+        <input type="checkbox" checked={siteDifferent} onChange={event=>setSiteDifferent(event.target.checked)} />
+        L’adresse du chantier est différente de l’adresse du client
+      </label>
+      {siteDifferent&&<CompleteAddressFields namePrefix="site" address={siteAddress} addressComplement={siteComplement} postalCode={sitePostalCode} city={siteCity} onChange={values=>{setSiteAddress(values.address);setSiteComplement(values.addressComplement);setSitePostalCode(values.postalCode);setSiteCity(values.city);}} />}
+      <input type="hidden" name="siteDifferent" value={siteDifferent?"true":"false"}/>
+      <input type="hidden" name="siteAddress" value={siteAddress}/>
+      <input type="hidden" name="siteComplement" value={siteComplement}/>
+      <input type="hidden" name="sitePostalCode" value={sitePostalCode}/>
+      <input type="hidden" name="siteCity" value={siteCity}/>
+      <p className="directory-search-help">L’adresse de chantier est enregistrée sur le devis, pas sur la fiche client.</p>
+    </section>}
     {mustAssignCommercial&&<section className="quote-section quote-assign-commercial">
       <header className="quote-section-head"><span><UserRound size={14}/></span><div><b>Attribuer au commercial</b><em>Choisissez un commercial, ou laissez l’affaire sans commercial pour l’attribuer plus tard</em></div></header>
       <label>Commercial responsable

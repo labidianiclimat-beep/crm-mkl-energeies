@@ -43,13 +43,14 @@ const ACTION_LABELS = {
   inform: "Client informé",
   resolve: "Résoudre",
   close: "Clôturer",
+  invoice: "À facturer",
   reopen: "Rouvrir",
   cancel: "Annuler",
   reassign: "Réassigner",
   due: "Changer l’échéance",
 };
 
-const DIRECT_ACTIONS = new Set(["accept", "start", "control", "inform", "resolve", "close"]);
+const DIRECT_ACTIONS = new Set(["accept", "start", "control", "inform", "resolve", "close", "invoice"]);
 
 function emptyDraft() {
   return { reason: "", result: "", waitFor: "", waitUntil: "", side: "client", ownerId: "", scheduledAt: "", dueAt: defaultDueLocal() };
@@ -94,6 +95,37 @@ function StatusMarks({ item }) {
   </>;
 }
 
+function InterventionSheets({ items, onOpen, onOpenDetail }) {
+  const rows = [...items].sort((a, b) => Number(Boolean(b.toInvoice)) - Number(Boolean(a.toInvoice)));
+  return <>
+    <div className="requests-table-wrap">
+      <table className="requests-table">
+        <thead><tr><th>N° SAV</th><th>Client</th><th>Intervention</th><th>Motif</th><th>Fiche</th><th>Facturation</th></tr></thead>
+        <tbody>
+          {rows.map(item => <tr key={item.id} onClick={() => onOpenDetail(item.id)}>
+            <td><b>{item.reference || "—"}</b></td>
+            <td>{item.clientNumber ? `${item.clientNumber} · ` : ""}{item.clientName}</td>
+            <td>{formatWhen(item.scheduledAt || item.dueAt)}</td>
+            <td>{item.subject}</td>
+            <td><button type="button" className="secondary sav-sheet-link" onClick={event => onOpen(item.id, event)}>Bon d’intervention</button></td>
+            <td>{item.toInvoice && <button type="button" className="sav-invoice-button" onClick={event => onOpen(item.id, event)}>À facturer</button>}</td>
+          </tr>)}
+          {!rows.length && <tr><td colSpan={6}>Aucune fiche d’intervention.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+    <div className="sav-cards">
+      {rows.map(item => <div key={item.id} className="sav-card" onClick={() => onOpenDetail(item.id)}>
+        <b>{item.reference || "SAV"} · {item.clientName}</b>
+        <span>{item.subject}</span>
+        <span>{formatWhen(item.scheduledAt || item.dueAt)}</span>
+        <button type="button" className="secondary sav-sheet-link" onClick={event => onOpen(item.id, event)}>Bon d’intervention</button>
+        {item.toInvoice && <button type="button" className="sav-invoice-button" onClick={event => onOpen(item.id, event)}>À facturer</button>}
+      </div>)}
+    </div>
+  </>;
+}
+
 export default function SavModule({ query = "", toast, onOpenClient }) {
   const [cases, setCases] = useState([]);
   const [people, setPeople] = useState([]);
@@ -109,6 +141,22 @@ export default function SavModule({ query = "", toast, onOpenClient }) {
   const [directory, setDirectory] = useState([]);
   const [action, setAction] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
+
+  async function openSheet(id, event) {
+    event?.stopPropagation();
+    setError("");
+    try {
+      const response = await authFetch(`/api/sav/${id}/intervention-sheet`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Le bon d’intervention n’a pas pu être préparé.");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      window.open(url, "_blank", "noopener");
+    } catch (caught) {
+      setError(String(caught.message || caught));
+    }
+  }
 
   async function loadList() {
     setLoading(true);
@@ -168,6 +216,7 @@ export default function SavModule({ query = "", toast, onOpenClient }) {
       if (tab === "late" && !item.overdue) return false;
       if (tab === "waiting" && item.status !== "waiting_client" && item.status !== "waiting_internal") return false;
       if (tab === "review" && item.status !== "to_review") return false;
+      if (tab === "sheets") return !needle || [item.reference, item.subject, item.clientName, item.clientNumber, item.ownerName].join(" ").toLowerCase().includes(needle);
       if (tab === "closed" && item.status !== "closed" && item.status !== "cancelled") return false;
       if (!needle) return true;
       return [item.reference, item.subject, item.clientName, item.clientNumber, item.ownerName].join(" ").toLowerCase().includes(needle);
@@ -326,16 +375,16 @@ export default function SavModule({ query = "", toast, onOpenClient }) {
 
     {!detail && <>
       <div className="requests-tabs">
-        {[["all", "Tous"], ["mine", "Les miens"], ["unopened", "Non ouverts"], ["late", "En retard"], ["waiting", "En attente"], ["review", "À contrôler"], ["closed", "Clôturés"]].map(([id, label]) =>
+        {[["all", "Tous"], ["sheets", "Fiches d’intervention"], ["mine", "Les miens"], ["unopened", "Non ouverts"], ["late", "En retard"], ["waiting", "En attente"], ["review", "À contrôler"], ["closed", "Clôturés"]].map(([id, label]) =>
           <button type="button" key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
       </div>
-      {loading ? <p className="requests-note">Chargement…</p> : <>
+      {loading ? <p className="requests-note">Chargement…</p> : tab === "sheets" ? <InterventionSheets items={visible} onOpen={openSheet} onOpenDetail={openDetail}/> : <>
         <div className="requests-table-wrap">
           <table className="requests-table">
             <thead><tr><th>N° SAV</th><th>Client</th><th>Motif</th><th>Responsable</th><th>Échéance</th><th>Statut</th><th>Prochaine action</th><th>Dernière activité</th></tr></thead>
             <tbody>
               {visible.map(item => <tr key={item.id} onClick={() => openDetail(item.id)}>
-                <td><b>{item.reference || "—"}</b></td>
+                <td><b>{item.reference || "—"}</b><button type="button" className="secondary sav-sheet-link" onClick={event => openSheet(item.id, event)}>Bon d’intervention</button></td>
                 <td>{item.clientNumber ? `${item.clientNumber} · ` : ""}{item.clientName}</td>
                 <td>{item.subject}</td>
                 <td>{item.ownerName}</td>
@@ -349,12 +398,13 @@ export default function SavModule({ query = "", toast, onOpenClient }) {
           </table>
         </div>
         <div className="sav-cards">
-          {visible.map(item => <button type="button" key={item.id} className="sav-card" onClick={() => openDetail(item.id)}>
+          {visible.map(item => <div key={item.id} className="sav-card" onClick={() => openDetail(item.id)}>
             <b>{item.reference || "SAV"} · {item.clientName}</b>
+            <button type="button" className="secondary sav-sheet-link" onClick={event => openSheet(item.id, event)}>Bon d’intervention</button>
             <span>{item.subject}</span>
             <span>{item.ownerName} · {formatWhen(item.dueAt)}</span>
             <StatusMarks item={item}/>
-          </button>)}
+          </div>)}
           {!visible.length && <p className="requests-note">Aucun dossier.</p>}
         </div>
       </>}
@@ -363,6 +413,8 @@ export default function SavModule({ query = "", toast, onOpenClient }) {
     {detail && <div className="requests-detail">
       <div className="requests-detail-main">
         <StatusMarks item={detail}/>
+        {detail.toInvoice && <p className="requests-actions"><button type="button" className="sav-invoice-button" onClick={event => openSheet(detail.id, event)}>À facturer</button></p>}
+        <p className="requests-actions"><button type="button" className="secondary" onClick={event => openSheet(detail.id, event)}>Bon d’intervention</button></p>
         <p className="requests-description">{detail.description}</p>
         {detail.resultComment && <p className="requests-description"><b>Compte rendu. </b>{detail.resultComment}</p>}
         <div className="requests-actions">

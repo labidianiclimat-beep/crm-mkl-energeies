@@ -11,6 +11,7 @@ import {
   RDV_TABLE_PERIODS,
   buildCommercialRdvTable,
 } from "../lib/commercial-rdv-table";
+import { dossierStepForAppointment, isUnstatedVisit, rdvJourneyLabel } from "../lib/dossier-step";
 
 export default function CommercialRdvTable({
   appointments = [],
@@ -18,6 +19,8 @@ export default function CommercialRdvTable({
   commercials = [],
   query = "",
   clients = [],
+  billing = [],
+  installations = [],
   onOpen,
   onOpenClient,
 }) {
@@ -110,11 +113,13 @@ export default function CommercialRdvTable({
       <div className="data-row data-head">
         <span />
         <span>{"Client / Prospect"}</span>
+        <span>Origine de contact</span>
         <span>Date</span>
         <span>Début</span>
         <span>Fin</span>
         <span>Type</span>
         <span>Statut RDV</span>
+        <span>Étape</span>
         <span>Calendrier</span>
         <span>Prospecteur</span>
         <span>Code postal</span>
@@ -122,7 +127,7 @@ export default function CommercialRdvTable({
       </div>
       {table.rows.length === 0 && <div className="empty">Aucun rendez-vous commercial pour ces filtres.</div>}
       {table.rows.map(row => (
-        <div className="data-row" key={row.id}>
+        <div className={`data-row${isUnstatedVisit(row) ? " is-unstated" : ""}`} key={row.id}>
           <span>
             <button type="button" className="rdv-board-edit" onClick={() => onOpen?.(row)} title="Ouvrir le rendez-vous">
               <Pencil size={14}/>
@@ -133,11 +138,13 @@ export default function CommercialRdvTable({
               ? <button type="button" className="rdv-board-client" onClick={() => onOpenClient?.(row)}>{row.clientName || row.prospectName || "Fiche client"}</button>
               : (row.prospectName || "—")}
           </b>
+          <span>{row.originLabel || "—"}</span>
           <span>{row.dateLabel}</span>
           <span>{row.startLabel}</span>
           <span>{row.endLabel}</span>
           <span>{row.partyType}</span>
-          <span><span className={`status-select is-readonly ${rdvStatusTone(row.status)}`}>{row.status}</span></span>
+          <span><span className={`status-select is-readonly ${rdvStatusTone(row.status)}`} title={row.status}>{rdvJourneyLabel(row)}</span></span>
+          <span>{dossierStepForAppointment(row, { appointments, prospects, billing, installations }).label || "—"}</span>
           <span>{row.calendar}</span>
           <span>{row.prospector || "—"}</span>
           <span>{row.postalCode || "—"}</span>

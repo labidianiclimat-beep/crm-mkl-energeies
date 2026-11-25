@@ -223,13 +223,9 @@ export function canOverrideAgendaConflicts(profile) {
   return canAssignClientCommercial(profile);
 }
 
-/** L'agenda du responsable commercial n'a pas de limite de rendez-vous sur un créneau : il les reçoit pour les répartir. */
-export function allowsStackedAgendaSlots(profile, userId, commercialId, holderRole = "") {
-  const holder = String(commercialId || "");
-  if (!holder) return false;
-  if (normalizeRoleLabel(holderRole) === "Responsable commercial") return true;
-  if (normalizeRoleLabel(profile?.role) !== "Responsable commercial") return false;
-  return holder === String(userId || "");
+/** Un commercial peut recevoir plusieurs rendez-vous ou événements sur le même créneau. */
+export function allowsStackedAgendaSlots(_profile, _userId, commercialId, _holderRole = "") {
+  return Boolean(String(commercialId || ""));
 }
 
 export function resolveAssignedCommercialId(profile, userId, requestedId) {
@@ -239,7 +235,7 @@ export function resolveAssignedCommercialId(profile, userId, requestedId) {
   return String(userId || "");
 }
 
-const ASSIGN_COMMENT_KEYS = new Set(["commercialId", "commercial", "notes"]);
+const ASSIGN_COMMENT_KEYS = new Set(["commercialId", "commercial", "notes", "sellerComment"]);
 const PHONE_KEYS = new Set(["phone", "appointmentPhone"]);
 
 /** Attribution au vendeur et commentaire, sans déplacer ni réécrire le rendez-vous. */
@@ -318,7 +314,8 @@ const HISTORY_FIELDS = {
   phone: "Téléphone",
   commercial_id: "Commercial",
   status: "Statut",
-  notes: "Commentaire",
+  notes: "Instruction",
+  sellerComment: "Commentaire vendeur",
   starts_at: "Date",
   duration_minutes: "Durée",
   duplicate: "Lien de duplication",
@@ -928,11 +925,35 @@ export function dedupeGoogleAgendaItems(items = []) {
   return result;
 }
 
-export const AGENDA_LAYOUT_VIEWS = ["day", "week", "month", "list", "table"];
+export const AGENDA_LAYOUT_VIEWS = ["day", "three", "week", "month", "list", "table"];
 
 function plainAgendaMap(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;
+}
+
+/** La couleur la plus récente gagne. Le compte distant reprend la main si l’appareil a été vidé. */
+export function keptAgendaColors(local = {}, remote = {}) {
+  const clean = value => {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const colors = {};
+    for (const [id, color] of Object.entries(source)) {
+      const hex = String(color || "").trim().toLowerCase();
+      if (/^#[0-9a-f]{6}$/.test(hex)) colors[String(id)] = hex;
+    }
+    return colors;
+  };
+  const localColors = clean(local.colors);
+  const remoteColors = clean(remote.colors);
+  const localAt = Date.parse(local.colorsUpdatedAt || "") || 0;
+  const remoteAt = Date.parse(remote.colorsUpdatedAt || "") || 0;
+  if (remoteAt > localAt && Object.keys(remoteColors).length) {
+    return { colors: remoteColors, colorsUpdatedAt: String(remote.colorsUpdatedAt) };
+  }
+  if (Object.keys(localColors).length) {
+    return { colors: localColors, colorsUpdatedAt: localAt ? String(local.colorsUpdatedAt) : "" };
+  }
+  return { colors: remoteColors, colorsUpdatedAt: remoteAt ? String(remote.colorsUpdatedAt) : "" };
 }
 
 /** Dernier affichage de l’agenda : vue, période, personnes, filtres. */
@@ -947,6 +968,7 @@ export function readAgendaLayout(raw, { fallbackView = "week" } = {}) {
   return {
     hidden: plainAgendaMap(source.hidden),
     colors: plainAgendaMap(source.colors),
+    colorsUpdatedAt: typeof source.colorsUpdatedAt === "string" ? source.colorsUpdatedAt : "",
     view,
     anchor: Number.isNaN(anchorDate.getTime()) ? "" : anchorDate.toISOString(),
     filters: {
@@ -962,6 +984,7 @@ export function mergeAgendaLayout(current, patch = {}) {
   const next = { ...source };
   if (patch.hidden && typeof patch.hidden === "object") next.hidden = patch.hidden;
   if (patch.colors && typeof patch.colors === "object") next.colors = patch.colors;
+  if (typeof patch.colorsUpdatedAt === "string") next.colorsUpdatedAt = patch.colorsUpdatedAt;
   if (AGENDA_LAYOUT_VIEWS.includes(patch.view)) next.view = patch.view;
   if (patch.anchor) next.anchor = patch.anchor;
   if (patch.filters && typeof patch.filters === "object") {

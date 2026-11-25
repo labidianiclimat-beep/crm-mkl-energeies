@@ -128,14 +128,14 @@ test("la fenetre propose le cerfa decoche et n imprime que les cases cochees", (
   assert.equal(choices.find(item => item.id === "cerfa")?.checked, false);
   assert.equal(choices.find(item => item.id === "pv")?.checked, true);
   assert.equal(choices.find(item => item.id === "anah")?.checked, true);
-  assert.equal(choices.find(item => item.id === "cgv")?.checked, true);
+  assert.equal(choices.find(item => item.id === "cgv"), undefined);
   const printed = applyAnnexChoices(doc, choices.map(item => (
     item.id === "pv" ? { ...item, checked: false } : item
   )));
   assert.equal(printed.printCerfaTva, false);
   assert.equal(printed.printPvMandat, false);
   assert.equal(printed.printAnahMandat, true);
-  assert.equal(printed.printCgv, true);
+  assert.equal(printed.printCgv, undefined);
 });
 
 test("le cerfa officiel et les pages sont dans public", () => {

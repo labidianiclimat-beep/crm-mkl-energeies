@@ -52,6 +52,23 @@ export function resolveScopedCommercialIds(profile, userId, teamIds = [], { forD
 }
 
 /**
+ * Agenda du responsable commercial : lui et les vendeurs dont le responsable est son nom.
+ * Les autres vendeurs restent hors de son agenda.
+ */
+export function agendaScopeIdsFromProfiles(profile, userId, rows = [], { forDispatch = false } = {}) {
+  const teamIds = teamMemberIdsFromProfiles(profile, userId, rows);
+  return resolveScopedCommercialIds(profile, userId, teamIds, { forDispatch });
+}
+
+/** Les agendas Admin VIP ne sont pas lus pour les autres rôles. */
+export function hiddenAgendaOwnerFilter(ownerIds) {
+  const ids = [...(ownerIds || [])].map(id => String(id || "").trim()).filter(Boolean);
+  if (!ids.length) return "";
+  const excluded = ids.map(id => `commercial_id.neq.${id}`).join(",");
+  return `&or=(commercial_id.is.null,and(${excluded}))`;
+}
+
+/**
  * Accès à une ligne client/devis scopée (ÉTAPE 9 + 13).
  * @param {{ organization_id?: string, commercial_id?: string, created_by?: string }} row
  * @param {string[]} teamIds ids équipe déjà résolus (responsable)
@@ -134,6 +151,46 @@ export function visibleAgendaRowForViewer(row, scopedIds, profile, privateOwnerI
     ? privateOwnerIds
     : new Set([...(privateOwnerIds || [])].map(id => String(id || "")).filter(Boolean));
   return !hidden.has(commercialId);
+}
+
+/**
+ * Le responsable commercial affiche les rendez-vous déjà limités à son équipe
+ * par le serveur. Un filtre local ou une liste de vendeurs incomplète ne doit
+ * pas en retirer.
+ */
+export function agendaRowsForViewer(rows, profile, { commercials = [], currentUserId = "", privateOwnerIds = new Set() } = {}) {
+  const list = rows || [];
+  if (
+    canViewOrgWideCommercialData(profile)
+    || isProspectDispatcher(profile)
+    || canViewTeamCommercialData(profile)
+  ) {
+    return list.filter(item => visibleAgendaRowForViewer(item, null, profile, privateOwnerIds));
+  }
+  const catalog = commercials || [];
+  const dispatchable = catalog.filter(user => {
+    const role = user?.role;
+    if (!["Commercial", "Responsable commercial", "Admin VIP", "Superadmin", "Admin second", "Direction"].includes(role)) return false;
+    if (!isAdminVipRole(profile?.role) && isAdminVipRole(role)) return false;
+    return true;
+  });
+  const allowed = (dispatchable.length ? dispatchable : catalog).map(user => user?.id).filter(Boolean);
+  if (currentUserId) allowed.push(currentUserId);
+  return list.filter(item => visibleAgendaRowForViewer(item, allowed, profile, privateOwnerIds));
+}
+
+/** Un filtre vendeur mémorisé ne doit pas masquer le reste de l’équipe. */
+export function agendaLayoutForViewer(profile, layout = {}) {
+  const filters = {
+    commercialId: "",
+    kind: "",
+    status: "",
+    ...(layout.filters || {}),
+  };
+  if (!canViewTeamCommercialData(profile)) {
+    return { ...layout, hidden: layout.hidden || {}, filters };
+  }
+  return { ...layout, hidden: {}, filters: { ...filters, commercialId: "" } };
 }
 
 export function buildCommercialScopeFilter(columnNames, scopedIds) {

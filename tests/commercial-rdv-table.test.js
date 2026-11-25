@@ -34,7 +34,7 @@ test("le tableau reprend les rendez-vous existants sans doublon ni event Google"
     { id: "g1", source: "google", prospectName: "Google", start, duration: 60, status: "Planifié" },
     { id: "busy", kind: "busy", private: true, prospectName: "Occupé", start, duration: 60, status: "Planifié" },
   ];
-  const prospects = [{ id: "p1", name: "HA101", postalCode: "68390", city: "Battenheim", phone: "0642853311", prospector: "Nadia", prospectorId: "pr1" }];
+  const prospects = [{ id: "p1", name: "HA101", postalCode: "68390", city: "Battenheim", phone: "0642853311", prospector: "Nadia", prospectorId: "pr1", source: "Stand Carrefour" }];
   const table = buildCommercialRdvTable(appointments, prospects, { pageSize: 100 });
   assert.equal(table.total, 1);
   assert.equal(table.rows[0].id, "rdv-1");
@@ -43,6 +43,7 @@ test("le tableau reprend les rendez-vous existants sans doublon ni event Google"
   assert.equal(table.rows[0].phone, "0642853311");
   assert.equal(table.rows[0].partyType, "Prospect");
   assert.equal(table.rows[0].prospector, "Nadia");
+  assert.equal(table.rows[0].originLabel, "Stand Carrefour");
   const byProspector = buildCommercialRdvTable(appointments, prospects, { prospectorId: "pr1", pageSize: 100 });
   assert.equal(byProspector.total, 1);
   assert.equal(isCommercialRdvRow(appointments[2]), false);
@@ -65,6 +66,8 @@ test("le tableau se filtre par commercial sans creer de doublon", () => {
   const ui = readFileSync(new URL("../app/components/commercial-rdv-table.js", import.meta.url), "utf8");
   assert.match(ui, /Tous les commerciaux/);
   assert.match(ui, /Tous les prospecteurs/);
+  assert.match(ui, /Origine de contact/);
+  assert.match(ui, /row\.originLabel/);
   assert.doesNotMatch(ui, /Tél\.|ClientPhoneLink|row\.phone/);
 });
 
@@ -145,6 +148,10 @@ test("le suivi ouvre la fiche client et ne statue pas dans le tableau", () => {
   assert.match(ui, /rdv-board-client/);
   assert.match(ui, /onOpenClient/);
   assert.match(ui, /is-readonly/);
+  assert.match(ui, /is-unstated/);
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.rdv-board-table \.data-row\.is-unstated\{[^}]*#fde2e2/);
+  assert.match(css, /\.client-followup-card\.is-unstated\{[^}]*#fde2e2/);
   assert.doesNotMatch(ui, /onUpdate\?\.\(row/);
   const record = readFileSync(new URL("../app/components/client-record.js", import.meta.url), "utf8");
   assert.match(record, /Statut RDV/);

@@ -1,6 +1,5 @@
 import {
   companyDisplayName,
-  companyHasCgv,
   companyEmitterLines,
   DEFAULT_COMPANY,
   DOCUMENT_HEAD_CSS,
@@ -17,7 +16,8 @@ import { authFetch } from "./supabase-rest.js";
 import { buildCerfaTvaAnnexHtml, cerfaTvaToAnnexImages } from "./cerfa-tva.js";
 import { anahMandatToAnnexImages, buildAnahMandatAnnexHtml } from "./anah-mandat.js";
 import { buildPvMandatAnnexHtml, pvMandatToAnnexImages } from "./pv-mandat.js";
-import { commercialDocsToAnnexImages, selectedCommercialDocs } from "./article-commercial-doc.js";
+import { appendCommercialPdfPaths, commercialDocsToAnnexImages, selectedCommercialDocs, selectedCommercialPdfPaths } from "./article-commercial-doc.js";
+import { fetchCgvPdfBytes, insertCgvAfterQuote, quotePrintsCgv } from "./devis-cgv.js";
 
 const euro = value =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
@@ -288,13 +288,10 @@ export async function collectDevisAnnexImages(doc, { articles = [], clients = []
     || clients.find(item => item.name === doc.client)
     || {};
   const commercial = await commercialDocsToAnnexImages(selectedCommercialDocs(doc, articles));
-  const cgv = doc.printCgv !== false && companyHasCgv(company)
-    ? await commercialDocsToAnnexImages([{ ficheData: company.cgvData, ficheName: company.cgvName || "CGV" }])
-    : [];
   const cerfa = await cerfaTvaToAnnexImages(doc, { client: customer, company });
   const anah = await anahMandatToAnnexImages(doc, { client: customer });
   const pvMandat = await pvMandatToAnnexImages(doc, { client: customer });
-  return [...pvMandat, ...commercial, ...cgv, ...cerfa, ...anah];
+  return [...pvMandat, ...commercial, ...cerfa, ...anah];
 }
 
 export async function openDevisPrintWindow(doc, { clients = [], articles = [], company, toast, filename } = {}) {
@@ -317,20 +314,32 @@ export async function openDevisPrintWindow(doc, { clients = [], articles = [], c
       clients,
       company: resolved || DEFAULT_COMPANY,
     });
-    const blob = await buildDevisPdfBlob(doc, {
+    let blob = await buildDevisPdfBlob(doc, {
       clients,
       company: resolved || DEFAULT_COMPANY,
       logoData,
       rgeLogoData,
       annexImages,
     });
+    if (quotePrintsCgv(doc)) {
+      blob = await insertCgvAfterQuote(blob, blob.quotePageCount, await fetchCgvPdfBytes());
+    }
+    const pdfPaths = documentPrintsAnnexes(doc) ? selectedCommercialPdfPaths(doc, articles) : [];
+    if (pdfPaths.length) {
+      blob = await appendCommercialPdfPaths(blob, pdfPaths);
+    }
     if (!blob || !blob.size) throw new Error("PDF vide.");
     triggerBlobDownload(blob, filename || documentPdfFilename({
       kind: doc.kind || "Devis",
       title: doc.number,
       source: doc,
     }), tab);
-    toast?.(annexImages.length ? "PDF ouvert avec la documentation en fin de devis" : "PDF ouvert");
+    const attached = annexImages.length + pdfPaths.length;
+    toast?.(quotePrintsCgv(doc)
+      ? (attached
+        ? "PDF ouvert : conditions générales, puis les documents choisis"
+        : "PDF ouvert avec les conditions générales")
+      : (attached ? "PDF ouvert avec la documentation en fin de devis" : "PDF ouvert"));
     return blob;
   } catch (error) {
     try { tab?.close(); } catch { /* ignore */ }

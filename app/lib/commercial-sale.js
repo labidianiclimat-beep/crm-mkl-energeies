@@ -6,18 +6,50 @@ import { normalizeRoleLabel } from "./roles.js";
 
 export const SALE_PROOF_KINDS = ["devis_signe", "manuel"];
 export const FUTURE_ELECTRONIC_PROOF = "electronique";
-export const SALE_CONFIRM_ROLES = ["Superadmin", "Admin VIP", "Responsable commercial"];
+export const SIGNED_QUOTE_VALIDATION = "action:validate_signed_quote";
+export const SALE_CONFIRM_ROLES = ["Superadmin", "Admin VIP"];
 export const SALE_REQUEST_ROLES = ["Commercial"];
 
 const CONFIRM = new Set(SALE_CONFIRM_ROLES);
 const REQUEST = new Set(SALE_REQUEST_ROLES);
 
+function profileReady(profile) {
+  if (profile?.active === false) return false;
+  if (profile && Object.prototype.hasOwnProperty.call(profile, "onboarding_completed_at") && !profile.onboarding_completed_at) return false;
+  return true;
+}
+
+function hasSignedQuoteGrant(profile) {
+  const lists = [profile?.actions, profile?.modules];
+  return lists.some(list => Array.isArray(list) && list.some(item => {
+    const code = String(item || "").trim();
+    return code === SIGNED_QUOTE_VALIDATION || code === "validate_signed_quote";
+  }));
+}
+
 export function canConfirmCommercialSale(profile) {
-  return CONFIRM.has(normalizeRoleLabel(profile?.role));
+  if (!profileReady(profile)) return false;
+  if (CONFIRM.has(normalizeRoleLabel(profile?.role))) return true;
+  return hasSignedQuoteGrant(profile);
 }
 
 export function canRequestCommercialSignature(profile) {
+  if (!profileReady(profile)) return false;
   return REQUEST.has(normalizeRoleLabel(profile?.role));
+}
+
+function ownsRecordedDevis(actor, devis) {
+  const owner = String(devis?.commercialId || devis?.commercial_id || "").trim().toLowerCase();
+  const actorId = String(actor?.id || "").trim().toLowerCase();
+  return Boolean(owner && actorId && owner === actorId);
+}
+
+function mayConfirm(actor) {
+  return actor?.saleAuthorized === true || canConfirmCommercialSale(actor);
+}
+
+function mayRequest(actor) {
+  return actor?.saleAuthorized === true || canRequestCommercialSignature(actor);
 }
 
 export function authorizeSaleAction(profile, action) {
@@ -130,6 +162,7 @@ export function assertRecordedAmount(recorded, submitted) {
 
 export function canReadSaleProof(profile, userId, sale) {
   if (!sale?.proofDigest) return false;
+  if (!profileReady(profile)) return false;
   if (canConfirmCommercialSale(profile)) return true;
   if (!canRequestCommercialSignature(profile)) return false;
   const reader = String(userId || "");
@@ -227,7 +260,10 @@ function replacedSale(book, devisId) {
 }
 
 export function requestCommercialSignature(book, { actor, devis, proof, now = Date.now() } = {}) {
-  if (!canRequestCommercialSignature(actor)) return fail("Vous ne pouvez pas déposer de signature.");
+  if (!mayRequest(actor)) return fail("Vous ne pouvez pas déposer de signature.");
+  if (!ownsRecordedDevis(actor, devis)) {
+    return fail("Vous ne pouvez déposer une preuve que pour un devis dont vous êtes responsable.");
+  }
   if (replacedSale(book, devis?.id)) return fail("Ce devis a été remplacé et ne peut plus être confirmé.");
   const checked = validateSaleProof(proof, { action: "demande", now });
   if (!checked.ok) return checked;
@@ -268,7 +304,7 @@ export function requestCommercialSignature(book, { actor, devis, proof, now = Da
 }
 
 export function confirmCommercialSale(book, { actor, devis, proof, now = Date.now() } = {}) {
-  if (!canConfirmCommercialSale(actor)) return fail("Vous ne pouvez pas confirmer cette vente.");
+  if (!mayConfirm(actor)) return fail("Vous ne pouvez pas confirmer cette vente.");
   const current = book || emptySaleBook();
   if (replacedSale(current, devis?.id)) return fail("Ce devis a été remplacé et ne peut plus être confirmé.");
   const pending = current.sales.find(item => item.devisId === String(devis?.id || "") && item.status === "demande");
@@ -341,7 +377,7 @@ function promote(book, pending, { actor, devis, now }) {
 }
 
 export function cancelCommercialSale(book, { actor, devisId, reason = "", now = Date.now() } = {}) {
-  if (!canConfirmCommercialSale(actor)) return fail("Vous ne pouvez pas confirmer cette vente.");
+  if (!mayConfirm(actor)) return fail("Vous ne pouvez pas confirmer cette vente.");
   const current = book || emptySaleBook();
   const sale = current.sales.find(item => item.devisId === String(devisId || "") && (item.status === "confirmee" || item.status === "annulee"));
   if (!sale) return fail("Aucune vente confirmée pour ce devis.");
@@ -378,7 +414,7 @@ export function cancelCommercialSale(book, { actor, devisId, reason = "", now = 
 }
 
 export function replaceCommercialSale(book, { actor, devis, proof, replacesDevisId, now = Date.now() } = {}) {
-  if (!canConfirmCommercialSale(actor)) return fail("Vous ne pouvez pas confirmer cette vente.");
+  if (!mayConfirm(actor)) return fail("Vous ne pouvez pas confirmer cette vente.");
   const previousId = String(replacesDevisId || proof?.replacesDevisId || "").trim();
   const current = book || emptySaleBook();
   const previous = current.sales.find(item => item.devisId === previousId && item.status === "confirmee");

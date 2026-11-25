@@ -143,7 +143,7 @@ export function assignmentNotificationKey(id, ownerId) {
 }
 
 const WORK_STATUSES = ["accepted", "scheduled", "in_progress", "waiting_client", "waiting_internal", "blocked"];
-const ACTION_IDS = ["accept", "schedule", "start", "wait", "block", "report", "submit", "control", "inform", "resolve", "close", "reopen", "cancel", "reassign", "due"];
+const ACTION_IDS = ["accept", "schedule", "start", "wait", "block", "report", "submit", "control", "inform", "resolve", "close", "reopen", "cancel", "reassign", "due", "invoice"];
 
 function fail(error) {
   return { ok: false, error };
@@ -172,6 +172,7 @@ export function eventLabel(kind) {
     informed: "Client informé",
     resolved: "Résolu",
     closed: "Clôturé",
+    to_invoice: "Marqué à facturer",
     reopened: "Rouvert",
     cancelled: "Annulé",
     reassigned: "Réassigné",
@@ -194,6 +195,7 @@ export function rowForRules(view = {}) {
     reviewed_at: view.reviewedAt ?? view.reviewed_at ?? null,
     client_informed: view.clientInformed ?? view.client_informed ?? false,
     client_informed_at: view.clientInformedAt ?? view.client_informed_at ?? null,
+    to_invoice: Boolean(view.toInvoice ?? view.to_invoice),
     reopen_count: view.reopenCount ?? view.reopen_count ?? 0,
   };
 }
@@ -217,6 +219,16 @@ export function decideSavAction(row, action, { userId, canManage = false, input 
 
   function done(patch, event) {
     return { ok: true, patch: { ...patch, updated_at: new Date(now).toISOString() }, event, notifications };
+  }
+
+  if (action === "invoice") {
+    if (row.status === "cancelled") return fail("Ce dossier est annulé.");
+    if (!isOwner && !isCreator && !canManage) return fail("Vous ne pouvez pas marquer ce dossier à facturer.");
+    if (row.to_invoice) return fail("Ce dossier est déjà à facturer.");
+    return done(
+      { to_invoice: true, to_invoice_at: new Date(now).toISOString() },
+      { kind: "to_invoice", from: row.status, to: row.status },
+    );
   }
 
   if (FINISHED.has(row.status) && action !== "reopen") {

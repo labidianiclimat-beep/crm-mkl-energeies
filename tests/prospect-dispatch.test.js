@@ -190,6 +190,7 @@ test("les prospects convertis restent visibles pour le suivi dispatcher", () => 
   assert.equal(visibleProspects([converted], { includeConverted: true }).length, 1);
   assert.equal(visibleProspects([linkedWithoutWonStage]).length, 0);
   assert.equal(dispatchOutcome(converted), "Transformé en client");
+  assert.equal(dispatchOutcome({ stage: "NRP", desiredKind: "rappel" }), "NRP");
   assert.equal(dispatchOutcome(linkedWithoutWonStage), "Transformé en client");
   assert.ok(commercialColor(commercial.id));
   assert.equal(agendaOwnerColor(commercial.id, {}), commercialColor(commercial.id));

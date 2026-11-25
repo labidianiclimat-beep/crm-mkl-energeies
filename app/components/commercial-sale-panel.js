@@ -11,7 +11,6 @@ export default function CommercialSalePanel({ document, profile }) {
   const [state, setState] = useState(null);
   const [error, setError] = useState("");
   const [date, setDate] = useState("");
-  const [file, setFile] = useState(null);
   const [reason, setReason] = useState("");
   const [replacesDevisId, setReplacesDevisId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,9 +42,8 @@ export default function CommercialSalePanel({ document, profile }) {
         body: JSON.stringify({ action, ...extra }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Action impossible");
+      if (!response.ok) throw new Error(data.error || "La validation n’a pas pu être envoyée.");
       setState(current => ({ ...current, ...data, canRequest: current?.canRequest, canConfirm: current?.canConfirm }));
-      setFile(null);
       setReason("");
     } catch (caught) {
       setError(String(caught.message || caught));
@@ -54,22 +52,16 @@ export default function CommercialSalePanel({ document, profile }) {
     }
   }
 
-  function toBase64(buffer) {
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    for (let index = 0; index < bytes.length; index += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-    }
-    return btoa(binary);
-  }
-
   async function deposit() {
-    if (!file || !date) {
-      setError("Choisissez le PDF signé et la date de signature.");
+    if (!date) {
+      setError("Indiquez la date de signature.");
       return;
     }
-    const pdfBase64 = toBase64(await file.arrayBuffer());
-    await send("demande", { declaredSignatureDate: date, pdfBase64, kind: "devis_signe" });
+    await send("demande", {
+      declaredSignatureDate: date,
+      kind: "devis_signe",
+      useStoredDevis: true,
+    });
   }
 
   async function openProof() {
@@ -89,7 +81,6 @@ export default function CommercialSalePanel({ document, profile }) {
 
   return <section className="commercial-sale-panel">
     <h3>Signature du client</h3>
-    <p>Le commercial dépose le PDF signé. La vente est confirmée ensuite par le Superadmin, l’Admin VIP ou le responsable commercial.</p>
     {verdict && <strong className={`sale-state ${tone}`}>{verdict}</strong>}
     {sale?.status === "confirmee" && <ul>
       <li>Date de signature : {sale.declaredSignatureDate}</li>
@@ -101,8 +92,7 @@ export default function CommercialSalePanel({ document, profile }) {
     {error && <p className="sale-error">{error}</p>}
     {state?.canRequest && sale?.status !== "confirmee" && sale?.status !== "demande" && <div className="sale-actions">
       <label>Date de signature<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
-      <label>PDF signé par le client<input type="file" accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] || null)} /></label>
-      <button type="button" className="primary" disabled={busy} onClick={deposit}>Déposer un devis signé</button>
+      <button type="button" className="primary" disabled={busy} onClick={deposit}>Soumettre à la validation</button>
     </div>}
     {state?.canConfirm && sale?.status === "demande" && <div className="sale-actions">
       <button type="button" className="primary" disabled={busy} onClick={() => send("confirmer")}>Confirmer la vente</button>

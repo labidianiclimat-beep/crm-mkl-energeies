@@ -16,18 +16,35 @@ export const PV_OPTIMIZER_OPTION = {
   ttc: 125,
 };
 
+export const PV_BATTERY_TAX = 20;
+
 export const PV_BATTERY_OPTION = {
   id: "MARSTEK-VENUS-E",
   code: "PV-BAT-MARSTEK",
   articleCode: "MARSTEK-VENUS-E",
-  name: "BAT-MARTEK VENUS-E",
-  ttc: 5000,
+  name: "BAT-MARTEK VENUS-E — 5 kW",
+  ttc: 4450.01,
+  tax: PV_BATTERY_TAX,
+};
+
+export const PV_BATTERY_INSTALL = {
+  id: "INST-BAT-MARSTEK",
+  code: "INST-BAT-MARSTEK",
+  articleCode: "INST-BAT-MARSTEK",
+  name: "Installation de batterie Marstek",
+  ttc: 550,
+  packageTtc: 5000,
+  tax: PV_BATTERY_TAX,
+  subcategory: "Batteries",
+  unit: "Forfait",
+  description: "Installation de batterie Marstek.\nPose et fixation de la batterie Marstek VENUS-E 5 kW, raccordement électrique, paramétrage, mise en service et contrôle du fonctionnement.",
 };
 
 const OPTION_CODES = new Set([
   ...PV_CONNECTION_OPTIONS.map(option => option.code),
   PV_OPTIMIZER_OPTION.code,
   PV_BATTERY_OPTION.code,
+  PV_BATTERY_INSTALL.code,
 ]);
 
 export function htForExactTtc(ttc, tax = PV_OPTION_TAX) {
@@ -95,7 +112,8 @@ function articleByCode(articles, spec) {
 }
 
 function optionLine(spec, sample, article) {
-  const description = String(article?.description || "").trim();
+  const tax = Number(spec.tax ?? PV_OPTION_TAX);
+  const description = String(article?.description || spec.description || "").trim();
   return {
     id: spec.idSeed,
     articleId: article?.id || null,
@@ -106,11 +124,11 @@ function optionLine(spec, sample, article) {
     category: "Photovoltaïque",
     subcategory: article?.subcategory || spec.subcategory || "",
     qty: 1,
-    unit: htForExactTtc(spec.ttc, PV_OPTION_TAX),
-    tax: PV_OPTION_TAX,
+    unit: htForExactTtc(spec.ttc, tax),
+    tax,
     discountType: "percent",
     discountValue: 0,
-    measureUnit: article?.unit || "Unité",
+    measureUnit: article?.unit || spec.unit || "Unité",
     bundleId: sample?.bundleId ?? null,
     bundleName: sample?.bundleName || "",
     bundleHeading: sample?.bundleHeading || sample?.bundleName || "",
@@ -145,10 +163,16 @@ export function applyPvBundleOptions(items = [], index, patch = {}, articles = [
   }
   if (choice.battery === PV_BATTERY_OPTION.id) {
     const previous = list.find(item => quoteBundleKey(item) === key && item.code === PV_BATTERY_OPTION.code);
+    const previousInstall = list.find(item => quoteBundleKey(item) === key && item.code === PV_BATTERY_INSTALL.code);
     extras.push(optionLine(
       { ...PV_BATTERY_OPTION, idSeed: previous?.id || "pv-batterie", subcategory: "Batteries" },
       sample,
       articleByCode(articles, PV_BATTERY_OPTION)
+    ));
+    extras.push(optionLine(
+      { ...PV_BATTERY_INSTALL, idSeed: previousInstall?.id || "pv-batterie-pose" },
+      sample,
+      articleByCode(articles, PV_BATTERY_INSTALL)
     ));
   }
   for (const item of list) {

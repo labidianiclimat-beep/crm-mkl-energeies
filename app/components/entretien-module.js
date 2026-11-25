@@ -78,7 +78,7 @@ function ReportBoard({ title, range, rows, total, onPrevious, onNext, onToday, p
       </div>
       <p className="entretien-report-total"><b>{euro(total)}</b> prix des contrats sur la période</p>
       <div className="data-panel entretien-report-table">
-        <div className="data-row data-head"><span>DATE</span><span>CLIENT</span><span>TECHNICIEN</span><span>CONTRAT</span><span>PRIX DU CONTRAT</span><span></span></div>
+        <div className="data-row data-head"><span>DATE</span><span>CLIENT</span><span>TECHNICIEN</span><span>CONTRAT</span><span>PRIX DU CONTRAT</span><span>RÈGLEMENT</span><span></span></div>
         {rows.map((row, index) => (
           <div className="data-row" key={`${row.id || "rapport"}-${row.day}-${index}`}>
             <span>{dayLabel(row.day)}</span>
@@ -86,6 +86,7 @@ function ReportBoard({ title, range, rows, total, onPrevious, onNext, onToday, p
             <span>{row.technician || "—"}</span>
             <span>{row.contract || "—"}</span>
             <b>{Number.isFinite(row.amount) ? euro(row.amount) : "—"}</b>
+            <span>{row.payment === "paid" ? <em className="entretien-payment is-paid">Payé</em> : row.payment === "unpaid" ? <em className="entretien-payment is-unpaid">Pas payé</em> : "—"}</span>
             <span>{row.id ? <button className="secondary" type="button" onClick={() => openReport(`/maintenance-form?id=${encodeURIComponent(row.id)}&client=${encodeURIComponent(row.client)}&contract=${encodeURIComponent(row.contract)}&date=${encodeURIComponent(row.day)}&technician=${encodeURIComponent(row.technician)}`)}>Ouvrir</button> : null}</span>
           </div>
         ))}

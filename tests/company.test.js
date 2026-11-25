@@ -106,7 +106,7 @@ test("l’API et les documents utilisent la fiche entreprise", () => {
   assert.equal(companyHasCgv(sanitizeCompany({ cgvName: "cgv.pdf", cgvData: "data:application/pdf;base64,AAA" })), true);
   assert.equal(companyHasCgv(sanitizeCompany({ cgvName: "cgv.pdf" })), false);
   assert.match(form, /Conditions générales/);
-  assert.match(print, /companyHasCgv/);
+  assert.match(print, /quotePrintsCgv/);
   assert.match(print, /documentPartiesHtml/);
   assert.match(thermal, /DocumentParties/);
   assert.match(previstie, /DocumentParties/);

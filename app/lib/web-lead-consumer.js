@@ -84,7 +84,9 @@ export function webLeadProspectInput(payload = {}, origin = webLeadOrigin(payloa
     housingType: text(payload.housing, 60),
     notes: text(payload.message, 2000),
     // Libellé lisible attendu par les écrans existants, jamais un code.
-    source: mirrorSourceLabel(origin.category, origin.subtype),
+    // Une source explicite (formulaire Meta) remplace le miroir, sans changer
+    // les demandes du site qui n'en portent pas.
+    source: text(payload.source, 80) || mirrorSourceLabel(origin.category, origin.subtype),
     stage: "Nouveau",
     desiredKind: intent === "rappel" ? "rappel" : "",
     extra: {

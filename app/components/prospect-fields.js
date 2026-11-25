@@ -13,6 +13,7 @@ import ProspectOriginTrace from "./prospect-origin-trace";
 import { displayRdvStatus } from "../lib/appointment-status";
 import { CIVILITIES, PHONE_PATTERN, PHONE_PLACEHOLDER, PHONE_TITLE } from "../lib/clients";
 import {
+  isContactSheetProspect,
   parseProjectTypes,
   PROJECT_TYPES,
   PROSPECT_SOURCES,
@@ -30,7 +31,6 @@ function ChipGroup({ name, value, onChange, options, multiple = false, disabled 
     const next = selected.includes(option)
       ? selected.filter(item => item !== option)
       : [...selected, option];
-    if (!next.length) return;
     onChange(next);
   }
   return (
@@ -76,7 +76,7 @@ export default function ProspectFields({
   const [phone, setPhone] = useState(prospect?.phone || "");
   const [landline, setLandline] = useState(prospect?.landline || "");
   const hasPhone = Boolean(String(phone).trim() || String(landline).trim());
-  const [projectTypes, setProjectTypes] = useState(() => parseProjectTypes(prospect?.types || prospect?.type || "Photovoltaïque"));
+  const [projectTypes, setProjectTypes] = useState(() => parseProjectTypes(prospect?.types || prospect?.type || ""));
   const [source, setSource] = useState(prospect?.source || "Prospection");
   const [stage, setStage] = useState(prospect?.stage || "Nouveau");
   const sourceOptions = PROSPECT_SOURCES.includes(source) || !source ? PROSPECT_SOURCES : [...PROSPECT_SOURCES, source];
@@ -195,7 +195,7 @@ export default function ProspectFields({
         <p className="prospect-hint">Touchez un ou plusieurs types de projet, puis l’origine du contact.</p>
         <span className="prospect-chip-label">Type de projet</span>
         <ChipGroup name="type" value={projectTypes} onChange={setProjectTypes} options={PROJECT_TYPES} multiple disabled={readOnly} />
-        <span className="prospect-chip-label">Origine du contact</span>
+        <h3>Origine de contact</h3>
         <ChipGroup name="source" value={source} onChange={setSource} options={sourceOptions} disabled={readOnly} />
         {/* Juste après le champ saisissable, et non ailleurs : le rapprochement
             des deux est tout l'intérêt. Ce bloc ne se saisit pas, il constate. */}
@@ -212,9 +212,12 @@ export default function ProspectFields({
         {prospect && (
           <>
             <span className="prospect-chip-label">Étape commerciale</span>
+            {isContactSheetProspect(prospect, appointment) && (
+              <p className="prospect-hint">NRP : ne répond pas, après plusieurs appels sans réponse.</p>
+            )}
             {readOnly
-              ? <p className="prospect-status-readout">{prospect.stage || stage}</p>
-              : <ChipGroup name="stage" value={stage} onChange={setStage} options={PROSPECT_STAGES} />}
+              ? <p className="prospect-status-readout">{prospect.stage === "NRP" ? "NRP — ne répond pas" : (prospect.stage || stage)}</p>
+              : <ChipGroup name="stage" value={stage} onChange={setStage} options={isContactSheetProspect(prospect, appointment) || stage === "NRP" ? PROSPECT_STAGES : PROSPECT_STAGES.filter(item => item !== "NRP")} />}
             <span className="prospect-chip-label">Qualification du rendez-vous</span>
             <p className="prospect-status-readout">{displayRdvStatus(prospect.rdvStatus)}</p>
             <ProspectCommercialField

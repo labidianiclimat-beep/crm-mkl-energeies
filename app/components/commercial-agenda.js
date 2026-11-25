@@ -21,6 +21,7 @@ import {
   googlePrimaryAliases,
   isGoogleAgendaCalendarShown,
   mergeAgendaLayout,
+  keptAgendaColors,
   readAgendaLayout,
   eventTimeLayout,
   packAgendaColumns,
@@ -47,9 +48,21 @@ import DirectorySearch from "./directory-search";
 import GoogleCalendarSettings from "./google-calendar-settings";
 import CommercialRdvTable from "./commercial-rdv-table";
 import { mergeRdvProspects } from "../lib/commercial-rdv-table";
-import { agendaOwnerColor, isAgendaOwnerShown, isProspectDispatcher } from "../lib/prospect-dispatch";
+import { agendaOwnerColor, isAgendaOwnerShown } from "../lib/prospect-dispatch";
+
+function darkerAgendaColor(color) {
+  const match = /^#([0-9a-f]{6})$/i.exec(String(color || "").trim());
+  if (!match) return "#1f2937";
+  const value = Number.parseInt(match[1], 16);
+  const channel = shift => Math.round(((value >> shift) & 255) * 0.58);
+  return `#${[channel(16), channel(8), channel(0)].map(part => part.toString(16).padStart(2, "0")).join("")}`;
+}
 import { isAdminVipRole } from "../lib/roles";
-import { canViewOrgWideCommercialData, visibleAgendaRowForViewer } from "../lib/scoping";
+import { agendaLayoutForViewer, agendaRowsForViewer } from "../lib/scoping";
+import { agendaCardContact, agendaCommentForSeller, appointmentVisitRound } from "../lib/prospects";
+import { agendaProvenance } from "../lib/prospect-origin-view";
+import { mapsSearchUrl, phoneCallHref } from "../lib/entretien-agenda";
+import { getCloudState, saveCloudState } from "../lib/supabase-rest";
 
 function todayIsoDate() {
   return agendaDateKey(new Date());
@@ -76,11 +89,21 @@ function appointmentDuplicateDefaults(item) {
   };
 }
 
+function appointmentR2Defaults(item) {
+  return {
+    ...appointmentDuplicateDefaults(item),
+    duplicate: false,
+    visitRound: "R2",
+  };
+}
+
 export default function CommercialAgendaView({
   appointments,
   prospects,
   linkProspects = [],
   clients = [],
+  billing = [],
+  installations = [],
   commercials = [],
   query,
   currentUserId = "",
@@ -113,6 +136,8 @@ export default function CommercialAgendaView({
   const [googleHidden, setGoogleHidden] = useState({});
   const [googleColors, setGoogleColors] = useState({});
   const slotDrag = useRef(null);
+  const colorSaveTimer = useRef(null);
+  const colorRevision = useRef(0);
   const layoutKey = `mkl-agenda-view:${currentUserId || "local"}`;
 
   function readStoredLayout() {
@@ -144,15 +169,26 @@ export default function CommercialAgendaView({
     if (!viewerIsVip && isAdminVipRole(user.role)) return false;
     return true;
   });
-  const visibleAppointments = useMemo(() => {
-    const rows = appointments || [];
-    if (canViewOrgWideCommercialData(currentProfile) || isProspectDispatcher(currentProfile)) {
-      return rows.filter(item => visibleAgendaRowForViewer(item, null, currentProfile, privateOwnerIds));
+  const visibleAppointments = useMemo(
+    () => agendaRowsForViewer(appointments, currentProfile, {
+      commercials,
+      currentUserId,
+      privateOwnerIds,
+    }),
+    [appointments, commercials, currentProfile, currentUserId, privateOwnerIds]
+  );
+  const prospectById = useMemo(() => {
+    const map = new Map();
+    for (const row of mergeRdvProspects(prospects, linkProspects)) {
+      if (row?.id) map.set(String(row.id), row);
     }
-    const allowed = (dispatchable.length ? dispatchable : commercials).map(user => user.id);
-    if (currentUserId) allowed.push(currentUserId);
-    return rows.filter(item => visibleAgendaRowForViewer(item, allowed, currentProfile, privateOwnerIds));
-  }, [appointments, commercials, currentProfile, currentUserId, dispatchable, privateOwnerIds]);
+    return map;
+  }, [prospects, linkProspects]);
+  function sellerComment(item) {
+    if (!item || item.source === "google" || item.kind === "busy" || item.private) return "";
+    const prospect = prospectById.get(String(item.prospectId || ""));
+    return [agendaCommentForSeller(prospect?.notes, item.notes), item.sellerComment].filter(Boolean).join("\n");
+  }
   const agendaOwners = useMemo(() => {
     const names = new Map();
     for (const user of dispatchable) {
@@ -168,13 +204,10 @@ export default function CommercialAgendaView({
   }, [dispatchable, privateOwnerIds, viewerIsVip, visibleAppointments]);
 
   useLayoutEffect(() => {
-    const layout = readStoredLayout();
+    const layout = agendaLayoutForViewer(currentProfile, readStoredLayout());
     setAgendaPrefs({ hidden: layout.hidden, colors: layout.colors });
     setFilters(layout.filters);
-    if (initialView !== "table") {
-      setViewMode(layout.view);
-      if (layout.anchor) setVisibleMonth(new Date(layout.anchor));
-    }
+    if (initialView !== "table") setViewMode(layout.view);
     try {
       const raw = JSON.parse(localStorage.getItem(`mkl-google-agenda-show:${currentUserId || "local"}`) || "{}");
       setGoogleHidden(raw.hidden && typeof raw.hidden === "object" ? raw.hidden : {});
@@ -184,6 +217,47 @@ export default function CommercialAgendaView({
       setGoogleColors({});
     }
   }, [currentUserId, initialView]);
+
+  useEffect(() => {
+    const userId = String(currentUserId || "");
+    if (!userId) return undefined;
+    let cancelled = false;
+    const key = `mkl-agenda-colors:${userId}`;
+    const seen = colorRevision.current;
+    getCloudState(key).then(result => {
+      if (cancelled || !result?.connected) return;
+      const remote = result.value && typeof result.value === "object" ? result.value : {};
+      const local = readStoredLayout();
+      const chosen = keptAgendaColors(local, remote);
+      const remoteAt = Date.parse(remote.colorsUpdatedAt || "") || 0;
+      const localAt = Date.parse(local.colorsUpdatedAt || "") || 0;
+      if (colorRevision.current !== seen) {
+        setAgendaPrefs(current => ({ ...current, colors: { ...chosen.colors, ...current.colors } }));
+        return;
+      }
+      if (Object.keys(chosen.colors).length) {
+        setAgendaPrefs(current => ({ ...current, colors: { ...current.colors, ...chosen.colors } }));
+        writeStoredLayout({ colors: chosen.colors, colorsUpdatedAt: chosen.colorsUpdatedAt || local.colorsUpdatedAt || "" });
+      }
+      const localHasColors = Object.keys(local.colors || {}).length > 0;
+      if (localHasColors && localAt >= remoteAt) {
+        const stamp = local.colorsUpdatedAt || new Date().toISOString();
+        writeStoredLayout({ colors: local.colors, colorsUpdatedAt: stamp });
+        saveCloudState(key, { colors: local.colors, colorsUpdatedAt: stamp }).catch(() => {});
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentUserId]);
+
+  useEffect(() => {
+    function closeOpenMenus(event) {
+      for (const node of document.querySelectorAll(".google-agenda details[open]")) {
+        if (!node.contains(event.target)) node.removeAttribute("open");
+      }
+    }
+    document.addEventListener("pointerdown", closeOpenMenus);
+    return () => document.removeEventListener("pointerdown", closeOpenMenus);
+  }, []);
 
   useEffect(() => {
     if (!focusAppointmentId && !focusAppointmentStart) return;
@@ -235,7 +309,22 @@ export default function CommercialAgendaView({
 
   function colorAgendaOwner(id, color) {
     const key = String(id);
-    saveAgendaPrefs({ ...agendaPrefs, colors: { ...agendaPrefs.colors, [key]: color } });
+    const hex = String(color || "").trim().toLowerCase();
+    if (!/^#[0-9a-f]{6}$/.test(hex)) return;
+    colorRevision.current += 1;
+    const colorsUpdatedAt = new Date().toISOString();
+    setAgendaPrefs(current => {
+      const colors = { ...current.colors, [key]: hex };
+      writeStoredLayout({ colors, colorsUpdatedAt });
+      const userId = String(currentUserId || "");
+      if (userId) {
+        clearTimeout(colorSaveTimer.current);
+        colorSaveTimer.current = setTimeout(() => {
+          saveCloudState(`mkl-agenda-colors:${userId}`, { colors, colorsUpdatedAt }).catch(() => {});
+        }, 400);
+      }
+      return { ...current, colors };
+    });
   }
 
   const googleMenu = useMemo(
@@ -286,7 +375,7 @@ export default function CommercialAgendaView({
   const list = useMemo(() => {
     const needle = String(query || "").trim().toLowerCase();
     return dedupeGoogleAgendaItems(shownAppointments)
-      .filter(item => !needle || [item.prospectName, item.commercial, item.city, item.subject, item.notes, item.kind, item.address].join(" ").toLowerCase().includes(needle))
+      .filter(item => !needle || [item.prospectName, item.commercial, item.city, item.subject, sellerComment(item), item.kind, item.address].join(" ").toLowerCase().includes(needle))
       .filter(item => !filters.commercialId || String(item.commercialId) === String(filters.commercialId))
       .filter(item => !filters.kind || item.kind === filters.kind)
       .filter(item => statusMatchesFilter(item.status, filters.status))
@@ -330,16 +419,25 @@ export default function CommercialAgendaView({
     date.setDate(weekStart.getDate() + index);
     return date;
   });
+  const threeDays = Array.from({ length: 3 }, (_, index) => {
+    const date = new Date(visibleMonth);
+    date.setDate(visibleMonth.getDate() + index);
+    return date;
+  });
+  const spanDays = viewMode === "three" ? threeDays : weekDays;
   const hours = Array.from({ length: AGENDA_DAY_HOUR_COUNT }, (_, index) => index + AGENDA_DAY_START_HOUR);
   const periodLabel = viewMode === "month"
     ? monthLabel
     : viewMode === "week"
       ? `${new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "short" }).format(weekDays[0])} — ${new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "short", year: "numeric" }).format(weekDays[6])}`
-      : new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).format(visibleMonth);
+      : viewMode === "three"
+        ? `${new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "2-digit", month: "short" }).format(threeDays[0])} — ${new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).format(threeDays[2])}`
+        : new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).format(visibleMonth);
   const shiftPeriod = direction => setVisibleMonth(current => {
     const next = new Date(current);
     if (viewMode === "month") next.setMonth(next.getMonth() + direction);
     else if (viewMode === "week") next.setDate(next.getDate() + 7 * direction);
+    else if (viewMode === "three") next.setDate(next.getDate() + 3 * direction);
     else next.setDate(next.getDate() + direction);
     writeStoredLayout({ anchor: next.toISOString() });
     return next;
@@ -368,20 +466,33 @@ export default function CommercialAgendaView({
         : personal
           ? agendaOwnerColor(item.commercialId, agendaPrefs.colors)
           : agendaEventColor(item);
+    const ownerPaint = item.commercialId ? agendaOwnerColor(item.commercialId, agendaPrefs.colors) : fill;
     const title = hiddenBusy ? "Indisponible" : (item.prospectName || "Sans titre");
-    const compact = isAllDayAgendaEvent(item) || Number(item.duration || 60) <= 30;
+    const contact = hiddenBusy || google ? null : agendaCardContact(item, prospectById.get(String(item.prospectId || "")));
+    const provenance = contact ? agendaProvenance(prospectById.get(String(item.prospectId || ""))) : "";
+    const rich = Boolean(contact) && !isAllDayAgendaEvent(item);
+    const phoneHref = contact ? phoneCallHref(contact.phone) : "";
+    const mapsHref = contact ? mapsSearchUrl(contact.address) : "";
+    const compact = isAllDayAgendaEvent(item) || (!rich && Number(item.duration || 60) <= 30);
     const clock = formatAgendaTime(item.start);
-    return <button
-      type="button"
-      className={`agenda-event tone-${tone}${compact ? " is-compact" : ""}${isOverdue(item) ? " late" : ""}`}
-      style={{ "--event": fill }}
+    return <div
+      role="button"
+      tabIndex={0}
+      className={`agenda-event tone-${tone}${compact ? " is-compact" : ""}${rich ? " is-contact" : ""}${isOverdue(item) ? " late" : ""}${unassigned ? " is-undispatched" : ""}${appointmentVisitRound(item.visitRound) ? " is-r2" : ""}`}
+      style={{ "--event": fill, "--event-ink": darkerAgendaColor(ownerPaint) }}
       key={item.id}
       onClick={event => { event.stopPropagation(); setCreating(false); setSelected(item); }}
-      title={hiddenBusy ? "Indisponible" : `${unassigned ? "À dispatcher · " : ""}${title}${clock ? ` · ${formatAgendaRange(item)}` : ""}${item.notes ? ` — ${item.notes}` : ""}`}
+      onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); setCreating(false); setSelected(item); } }}
+      title={hiddenBusy ? "Indisponible" : `${unassigned ? "À dispatcher · " : ""}${contact?.name || title}${provenance ? ` · ${provenance}` : ""}${clock ? ` · ${formatAgendaRange(item)}` : ""}`}
     >
-      <span className="agenda-event-title">{title}</span>
-      {clock && <time>{clock}</time>}
-    </button>;
+      {appointmentVisitRound(item.visitRound) ? <span className="agenda-r2">R2</span> : null}
+      <span className="agenda-event-title">{rich ? contact.lastName : (contact?.name || title)}</span>
+      {rich && contact.firstName ? <span className="agenda-event-given">{contact.firstName}</span> : null}
+      {rich && provenance ? <span className="agenda-event-origin">{provenance}</span> : null}
+      {clock && !rich ? <time>{clock}</time> : null}
+      {rich && phoneHref ? <a className="agenda-event-link" href={phoneHref} onClick={event => event.stopPropagation()}>{contact.phone}</a> : null}
+      {rich && mapsHref ? <a className="agenda-event-link" href={mapsHref} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{contact.address}</a> : null}
+    </div>;
   }
 
   function beginSlot(day, event) {
@@ -455,12 +566,29 @@ export default function CommercialAgendaView({
       <div className="google-agenda-bar-right">
         <div className="calendar-view-switch">
           <button type="button" className={viewMode === "day" ? "active" : ""} onClick={() => chooseView("day")}><Clock3 size={15}/>Jour</button>
+          <button type="button" className={viewMode === "three" ? "active" : ""} onClick={() => chooseView("three")}><CalendarDays size={15}/>3 jours</button>
           <button type="button" className={viewMode === "week" ? "active" : ""} onClick={() => chooseView("week")}><CalendarDays size={15}/>Semaine</button>
           <button type="button" className={viewMode === "month" ? "active" : ""} onClick={() => chooseView("month")}><CalendarDays size={15}/>Mois</button>
           <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => chooseView("list")}><FileText size={15}/>Agenda</button>
           <button type="button" className={`rdv-table-switch ${viewMode === "table" ? "active" : ""}`} onClick={() => chooseView("table")}><Table2 size={15}/>Rendez-vous</button>
         </div>
         <button className="secondary" type="button" onClick={onAddProspect}><Plus size={16}/>Nouveau prospect</button>
+        {agendaOwners.length > 0 && <details className="google-agenda-picker">
+          <summary>Agendas</summary>
+          <div className="google-agenda-picker-panel" aria-label="Agendas affichés">
+            {agendaOwners.map(user => {
+              const shown = isAgendaOwnerShown(user.id, agendaPrefs.hidden);
+              const color = agendaOwnerColor(user.id, agendaPrefs.colors);
+              return <div key={user.id} className={`google-agenda-row${shown ? " is-on" : ""}`}>
+                <label>
+                  <input type="checkbox" checked={shown} onChange={() => toggleAgendaOwner(user.id)} aria-label={`Afficher l’agenda de ${user.name}`} />
+                  <span>{user.name}</span>
+                </label>
+                <input type="color" value={color} aria-label={`Couleur de ${user.name}`} onClick={event => event.stopPropagation()} onChange={event => colorAgendaOwner(user.id, event.target.value)} />
+              </div>;
+            })}
+          </div>
+        </details>}
         {googleMenu.length > 0 && <details className="google-agenda-picker">
           <summary>Agendas Google</summary>
           <div className="google-agenda-picker-panel" aria-label="Agendas Google">
@@ -495,22 +623,13 @@ export default function CommercialAgendaView({
       appointments={shownAppointments}
       prospects={mergeRdvProspects(prospects, linkProspects)}
       clients={clients}
+      billing={billing}
+      installations={installations}
       commercials={dispatchable}
       query={query}
       onOpen={item => { setCreating(false); setSelected(item); }}
       onOpenClient={onOpenClient}
     />}
-    {agendaOwners.length > 0 && <div className="agenda-people" aria-label="Agendas affichés">
-      {agendaOwners.map(user => {
-        const shown = isAgendaOwnerShown(user.id, agendaPrefs.hidden);
-        const color = agendaOwnerColor(user.id, agendaPrefs.colors);
-        return <label className={`agenda-person${shown ? "" : " is-off"}`} key={user.id}>
-          <input type="checkbox" checked={shown} onChange={() => toggleAgendaOwner(user.id)} aria-label={`Afficher l’agenda de ${user.name}`} />
-          <input type="color" value={color} aria-label={`Couleur de ${user.name}`} onChange={event => colorAgendaOwner(user.id, event.target.value)} />
-          <span>{user.name}</span>
-        </label>;
-      })}
-    </div>}
     {viewMode !== "list" && viewMode !== "table" && <section className="commercial-calendar">
       <div className="agenda-color-legend">
         <span><i style={{ background: "#2563eb" }}/>RDV</span>
@@ -536,10 +655,10 @@ export default function CommercialAgendaView({
           }}
         ><span>{day.getDate()}</span><div>{shown.map(eventButton)}{dayEvents.length > shown.length && <small className="agenda-more-count">+{dayEvents.length - shown.length}</small>}</div></div>;
       })}</div></div>}
-      {viewMode === "week" && <div className="week-calendar timed-week">
+      {(viewMode === "week" || viewMode === "three") && <div className={`week-calendar timed-week${viewMode === "three" ? " is-three" : ""}`}>
         <div className="timed-week-head">
           <span />
-          {weekDays.map(day => {
+          {spanDays.map(day => {
             const key = agendaDateKey(day);
             return <header className={key === todayKey ? "today" : ""} key={key}>
               <button type="button" className="agenda-day-jump" onClick={() => { rememberDate(day); chooseView("day"); }}>
@@ -551,7 +670,7 @@ export default function CommercialAgendaView({
         </div>
         <div className="timed-week-allday">
           <small>Journée</small>
-          {weekDays.map(day => {
+          {spanDays.map(day => {
             const key = agendaDateKey(day);
             const allDay = (eventsByDay.get(key) || []).filter(isAllDayAgendaEvent);
             return <div key={`all-${key}`} onClick={event => {
@@ -562,7 +681,7 @@ export default function CommercialAgendaView({
         </div>
         <div className="timed-week-body">
           <div className="timed-hours">{hours.map(hour => <time key={hour}>{String(hour).padStart(2, "0")}:00</time>)}</div>
-          {weekDays.map(day => {
+          {spanDays.map(day => {
             const key = agendaDateKey(day);
             const timed = (eventsByDay.get(key) || []).filter(item => !isAllDayAgendaEvent(item));
             return timedCanvas(day, timed);
@@ -583,15 +702,28 @@ export default function CommercialAgendaView({
       {list.length === 0 && <div className="empty">Aucun événement planifié. Cliquez Créer ou un créneau dans Semaine.</div>}
       {list.map(item => {
         const prospect = prospects.find(p => p.id === item.prospectId);
-        return <article className={`commercial-appointment tone-${agendaEventTone(item)}`} key={item.id}>
+        const undispatched = item.source !== "google" && item.kind !== "busy" && !item.private && !item.commercialId;
+        return <article className={`commercial-appointment tone-${agendaEventTone(item)}${undispatched ? " is-undispatched" : ""}`} key={item.id} style={{ "--event-ink": darkerAgendaColor(item.commercialId ? agendaOwnerColor(item.commercialId, agendaPrefs.colors) : "#f6bf26") }}>
           <div className="commercial-appointment-date"><b>{new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "2-digit", month: "short" }).format(new Date(item.start))}</b><span>{formatAgendaRange(item)} · {item.duration || 60} min</span></div>
-          <div className="commercial-appointment-prospect"><span className="appointment-state">{item.source === "google" ? "Google" : item.kind === "busy" ? "Occupé" : `${agendaKindLabel(item.kind)} · ${item.status}`}</span><h3>{item.prospectName}</h3><p><MapPin size={13}/>{item.address || item.city || prospect?.city} · {item.subject || item.type}</p>{item.notes ? <p className="event-notes">{item.notes}</p> : null}</div>
+          <div className="commercial-appointment-prospect"><span className="appointment-state">{item.source === "google" ? "Google" : item.kind === "busy" ? "Occupé" : `${agendaKindLabel(item.kind)} · ${item.status}`}</span>{(() => {
+            const contact = item.source === "google" || item.kind === "busy" || item.private ? null : agendaCardContact(item, prospectById.get(String(item.prospectId || "")));
+            const provenance = contact ? agendaProvenance(prospectById.get(String(item.prospectId || ""))) : "";
+            const phoneHref = contact ? phoneCallHref(contact.phone) : "";
+            const mapsHref = contact ? mapsSearchUrl(contact.address) : "";
+            return <>
+              <h3>{contact ? contact.lastName : item.prospectName}{contact?.firstName ? ` ${contact.firstName}` : ""}</h3>
+              {provenance ? <span className="agenda-event-origin">{provenance}</span> : null}
+              {phoneHref ? <a className="agenda-event-link" href={phoneHref}>{contact.phone}</a> : null}
+              {mapsHref ? <a className="agenda-event-link" href={mapsHref} target="_blank" rel="noreferrer">{contact.address}</a> : <p><MapPin size={13}/>{item.address || item.city || prospect?.city} · {item.subject || item.type}</p>}
+            </>;
+          })()}</div>
           <div className="commercial-dispatch">
             {canReassignCommercial && <label>Vendeur<select value={item.commercialId || ""} onChange={event => update(item, { commercialId: event.target.value, commercial: dispatchable.find(user => user.id === event.target.value)?.name || "" }, "Rendez-vous attribué")}><option value="">Non attribué</option>{dispatchable.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>}
             {canStatuerAppointment(currentProfile, currentUserId, item) && !isPersonalAgendaKind(item.kind) && <label>Statut<select value={normalizeAgendaStatus(item.status)} onChange={event => update(item, { status: event.target.value }, "Statut modifié")}>{allowedRdvStatusesFor(currentProfile, currentUserId, item).map(status => <option key={status}>{status}</option>)}</select></label>}
           </div>
           <div className="commercial-appointment-actions">
             <button type="button" onClick={() => setSelected(item)}>Détail</button>
+            {item.source !== "google" && item.kind !== "busy" && !item.private && !isPersonalAgendaKind(item.kind) && <button type="button" onClick={() => openCreate(appointmentR2Defaults(item))}>Créer un R2</button>}
             <button type="button" onClick={() => openCreate(appointmentDuplicateDefaults(item))}><Copy size={16}/>Dupliquer le rendez-vous</button>
             {canDelete && <button type="button" onClick={() => onRemove?.(item)}><Trash2 size={16}/></button>}
           </div>
@@ -607,12 +739,14 @@ export default function CommercialAgendaView({
       canEdit={canEdit}
       currentProfile={currentProfile}
       currentUserId={currentUserId}
+      linkColor={darkerAgendaColor(selected.commercialId ? agendaOwnerColor(selected.commercialId, agendaPrefs.colors) : "#f6bf26")}
       onClose={() => setSelected(null)}
       onUpdate={update}
       onRemove={onRemove}
       onOpenProspect={onOpenProspect}
       lockStatus={viewMode === "table"}
       onDuplicate={() => { openCreate(appointmentDuplicateDefaults(selected)); }}
+      onCreateR2={() => { openCreate(appointmentR2Defaults(selected)); }}
       onFollowUp={() => { openCreate({ prospectId: selected.prospectId, prospectName: selected.prospectName }); }}
     />}
     {creating && <CreateEventModal
@@ -644,9 +778,11 @@ function formatHistoryValue(value) {
   return String(value);
 }
 
-function EventDetail({ item, prospect, commercials, canReassignCommercial, canDelete, canEdit = true, currentProfile = null, currentUserId = "", lockStatus = false, onClose, onUpdate, onRemove, onOpenProspect, onDuplicate, onFollowUp }) {
+function EventDetail({ item, prospect, commercials, canReassignCommercial, canDelete, canEdit = true, currentProfile = null, currentUserId = "", lockStatus = false, linkColor = "#1f2937", onClose, onUpdate, onRemove, onOpenProspect, onDuplicate, onCreateR2, onFollowUp }) {
   const [history, setHistory] = useState(null);
-  const [comment, setComment] = useState(item.notes || "");
+  const instruction = agendaCommentForSeller(prospect?.notes, item.notes);
+  const [sellerNote, setSellerNote] = useState(item.sellerComment || "");
+  const [personalNote, setPersonalNote] = useState(item.notes || "");
   const [phoneDraft, setPhoneDraft] = useState(item.phone || prospect?.phone || "");
   const phone = item.phone || prospect?.phone || "";
   const google = item.source === "google";
@@ -655,38 +791,57 @@ function EventDetail({ item, prospect, commercials, canReassignCommercial, canDe
   const canPhone = !google && !hiddenBusy && canCorrectAppointmentPhone(currentProfile, currentUserId, item);
   const canHistory = canViewAppointmentHistory(currentProfile);
   useLoadHistory(item.id, setHistory, canHistory);
-  useEffect(() => { setComment(item.notes || ""); }, [item.id, item.notes]);
+  useEffect(() => { setSellerNote(item.sellerComment || ""); }, [item.id, item.sellerComment]);
+  useEffect(() => { setPersonalNote(item.notes || ""); }, [item.id, item.notes]);
   useEffect(() => { setPhoneDraft(item.phone || prospect?.phone || ""); }, [item.id, item.phone, prospect?.phone]);
   const personal = isPersonalAgendaKind(item.kind);
+  const isR2 = Boolean(appointmentVisitRound(item.visitRound));
   const done = normalizeActionKind(item.kind) === "rappel" ? "Rappel effectué" : "Réalisé";
   const title = google ? (item.prospectName || "Sans titre") : hiddenBusy ? "Indisponible" : item.prospectName;
+  const contact = google || hiddenBusy ? null : agendaCardContact(item, prospect);
+  const mapsHref = mapsSearchUrl(contact?.address || item.address || item.city || "");
+  const phoneHref = phoneCallHref(phone);
+  const provenance = google || hiddenBusy ? "" : agendaProvenance(prospect);
   const subtitle = google
     ? (item.googleCalendarSummary || "Google Calendar")
     : hiddenBusy
       ? "Période occupée"
       : `${agendaKindLabel(item.kind)} · ${personal ? (item.commercial || "Non attribué") : item.status}`;
   async function saveSheet() {
-    if (canComment) await onUpdate(item, { notes: comment }, "Commentaire enregistré");
+    if (canComment && personal) await onUpdate(item, { notes: personalNote }, "Commentaire enregistré");
+    if (canComment && !personal) await onUpdate(item, { sellerComment: sellerNote }, "Commentaire vendeur enregistré");
     if (canPhone && phoneDraft.trim() !== phone) await onUpdate(item, { phone: phoneDraft.trim() }, "Numéro corrigé");
   }
   return <div className="agenda-popover-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-    <div className="agenda-popover event-detail-modal" role="dialog" onMouseDown={e => e.stopPropagation()}>
+    <div className="agenda-popover event-detail-modal" role="dialog" style={{ "--event-ink": linkColor }} onMouseDown={e => e.stopPropagation()}>
       <div className="event-detail-top">
         {(canComment || canPhone) && <button type="button" className="primary event-detail-save" onClick={saveSheet}>Enregistrer</button>}
         <button type="button" className="modal-close" onClick={onClose}><X/></button>
       </div>
+      {!hiddenBusy && !google && <p className="event-commercial">{item.commercial || "Non attribué"}</p>}
       <div className={`event-detail-flag tone-${hiddenBusy ? "busy" : agendaEventTone(item)}`}>{subtitle}</div>
-      <h2>{title}</h2>
-      {!hiddenBusy && !google && <p>{item.subject || item.appointmentType} — {item.commercial || "Non attribué"}</p>}
+      <h2>{contact ? contact.lastName : title}</h2>
+      {!hiddenBusy && !google && contact.firstName ? <p className="event-person-given">{contact.firstName}</p> : null}
+      {provenance ? <p className="agenda-event-origin">{provenance}</p> : null}
+      {!hiddenBusy && !google && (item.subject || item.appointmentType) ? <p>{item.subject || item.appointmentType}</p> : null}
       {google && <p>{item.commercial || "Commercial"} — événement importé depuis Google, sans fiche prospect</p>}
       <div className="event-detail-grid">
         <div><Clock3 size={16}/><span>{formatAgendaRange(item)} · {item.duration || 60} min</span></div>
-        {!hiddenBusy && <div><MapPin size={16}/><span>{item.address || item.city || "Lieu non renseigné"}</span></div>}
-        {!hiddenBusy && !google && !canPhone && <div><Phone size={16}/><span>{phone || "Téléphone non renseigné"}</span></div>}
+        {!hiddenBusy && <div><MapPin size={16}/>{mapsHref ? <a className="agenda-event-link" href={mapsHref} target="_blank" rel="noreferrer">{contact?.address || item.address || item.city}</a> : <span>Lieu non renseigné</span>}</div>}
+        {!hiddenBusy && !google && !canPhone && <div><Phone size={16}/>{phoneHref ? <a className="agenda-event-link" href={phoneHref}>{phone}</a> : <span>Téléphone non renseigné</span>}</div>}
         {canPhone && <label className="event-status-field">Numéro de téléphone<input value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} placeholder="06 12 34 56 78" /></label>}
       </div>
-      {!google && !hiddenBusy && <label className="event-status-field">Commentaire
-        <textarea rows={3} value={comment} readOnly={!canComment} placeholder="Note visible sur le rendez-vous du vendeur" onChange={event => setComment(event.target.value)} />
+      {!google && !hiddenBusy && !personal && isR2 && <label className="event-status-field">Notes pour R2
+        <textarea rows={3} value={sellerNote} readOnly={!canComment} placeholder="Notes pour préparer le R2" onChange={event => setSellerNote(event.target.value)} />
+      </label>}
+      {!google && !hiddenBusy && !personal && <label className="event-status-field event-instruction">Instruction
+        <textarea rows={4} value={instruction} readOnly placeholder="Aucune instruction sur la fiche prospect" />
+      </label>}
+      {!google && !hiddenBusy && !personal && !isR2 && <label className="event-status-field">Commentaire vendeur
+        <textarea rows={3} value={sellerNote} readOnly={!canComment} placeholder="Note du vendeur, visible sur ce rendez-vous" onChange={event => setSellerNote(event.target.value)} />
+      </label>}
+      {!google && !hiddenBusy && personal && <label className="event-status-field">Commentaire
+        <textarea rows={3} value={personalNote} readOnly={!canComment} placeholder="Détail visible sur l’agenda" onChange={event => setPersonalNote(event.target.value)} />
       </label>}
       {canPhone && phoneDraft.trim() !== phone && <button type="button" className="secondary event-comment-save" onClick={() => onUpdate(item, { phone: phoneDraft.trim() }, "Numéro corrigé")}>Corriger le numéro</button>}
       {!google && !hiddenBusy && !canEdit && <p className="event-lock-note">L’horaire de ce rendez-vous est verrouillé. Dupliquez-le ou programmez un nouveau RDV ou rappel.</p>}
@@ -715,6 +870,7 @@ function EventDetail({ item, prospect, commercials, canReassignCommercial, canDe
           ><Phone size={16}/>Appeler</ClientPhoneLink>
         )}
         {!google && !hiddenBusy && !personal && <button type="button" className="is-secondary" onClick={() => onOpenProspect?.(prospect || { id: item.prospectId })}><Eye size={16}/>Fiche prospect</button>}
+        {!google && !hiddenBusy && !personal && <button type="button" className="is-secondary" onClick={onCreateR2}>Créer un R2</button>}
         {!google && !hiddenBusy && <button type="button" className="is-secondary" onClick={onDuplicate}><Copy size={16}/>Dupliquer le rendez-vous</button>}
         {!google && !hiddenBusy && <button type="button" className="is-sun" onClick={onFollowUp}>Nouveau RDV ou rappel</button>}
       </div>
@@ -742,13 +898,15 @@ function useLoadHistory(id, setHistory, enabled) {
 }
 
 function CreateEventModal({ prospects, commercials, canAssignCommercial, currentUserId, defaults = {}, onClose, onCreate }) {
-  const [kind, setKind] = useState(defaults.actionKind || "rendez-vous");
+  const isR2 = Boolean(appointmentVisitRound(defaults.visitRound));
+  const [kind, setKind] = useState(isR2 ? "rendez-vous" : (defaults.actionKind || "rendez-vous"));
   const [more, setMore] = useState(Boolean(defaults.duplicate));
   const personal = isPersonalAgendaKind(kind);
+  const lockedProspect = Boolean(isR2 && defaults.prospectId);
   return <div className="agenda-popover-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
     <div className="agenda-popover" role="dialog" onMouseDown={e => e.stopPropagation()}>
       <button type="button" className="modal-close" onClick={onClose}><X/></button>
-      <h2>{defaults.duplicate ? "Dupliquer le rendez-vous" : "Nouvel événement"}</h2>
+      <h2>{isR2 ? "Créer un R2" : defaults.duplicate ? "Dupliquer le rendez-vous" : "Nouvel événement"}</h2>
       {defaults.appointmentDate && <p className="agenda-popover-when">{defaults.appointmentDate} · {defaults.appointmentStart || "09:00"} · {defaults.duration || 60} min</p>}
       <form className="agenda-create-form" onSubmit={async e => {
         e.preventDefault();
@@ -758,29 +916,34 @@ function CreateEventModal({ prospects, commercials, canAssignCommercial, current
           start: `${data.appointmentDate}T${data.appointmentStart}`,
           kind,
           actionKind: kind,
-          prospectId: personal ? "" : data.prospectId,
-          prospectName: personal ? data.title : "",
+          prospectId: personal ? "" : (data.prospectId || defaults.prospectId || ""),
+          prospectName: personal ? data.title : (defaults.prospectName || ""),
           subject: personal ? data.title : data.subject,
           commercialId: data.commercialId || currentUserId,
           phone: personal ? "" : (defaults.phone || ""),
           duplicatedFromId: defaults.duplicatedFromId || "",
+          visitRound: appointmentVisitRound(defaults.visitRound),
+          sellerComment: isR2 ? String(data.r2Notes || "").trim() : "",
         });
       }}>
-        <div className="next-action-kinds compact">{AGENDA_CREATE_KINDS.map(item => <label key={item.id}><input type="radio" name="actionKind" value={item.id} required checked={item.id === kind} onChange={() => setKind(item.id)} /><span>{item.label}</span></label>)}</div>
+        {!isR2 && <div className="next-action-kinds compact">{AGENDA_CREATE_KINDS.map(item => <label key={item.id}><input type="radio" name="actionKind" value={item.id} required checked={item.id === kind} onChange={() => setKind(item.id)} /><span>{item.label}</span></label>)}</div>}
         {personal
           ? <label>Intitulé<input name="title" required defaultValue={defaults.prospectName || defaults.subject || ""} placeholder="Ex. formation produits, accompagnement terrain" /></label>
-          : <DirectorySearch items={prospects} kind="prospect" idName="prospectId" required defaultValue={defaults.prospectId || ""} />}
+          : lockedProspect
+            ? <p className="agenda-r2-prospect">Prospect <b>{defaults.prospectName || "Rendez-vous d’origine"}</b><input type="hidden" name="prospectId" value={defaults.prospectId} /></p>
+            : <DirectorySearch items={prospects} kind="prospect" idName="prospectId" required defaultValue={defaults.prospectId || ""} />}
         <div className="form-row"><label>Date<input name="appointmentDate" type="date" required defaultValue={defaults.appointmentDate || ""} /></label><label>Heure<input name="appointmentStart" type="time" required defaultValue={defaults.appointmentStart || "09:00"} /></label></div>
         <label>Durée<select name="duration" defaultValue={defaults.duration || "60"}>{AGENDA_DURATIONS.map(value => <option key={value} value={value}>{value < 60 ? `${value} min` : value % 60 ? `${Math.floor(value / 60)} h ${value % 60}` : `${value / 60} h`}</option>)}</select></label>
         {canAssignCommercial && <label>Vendeur<select name="commercialId" defaultValue={defaults.commercialId || currentUserId}><option value="">Non attribué</option>{commercials.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>}
-        <label>Commentaire<textarea name="notes" rows="3" defaultValue={defaults.notes || ""} placeholder={personal ? "Détail visible sur l’agenda" : "Visible sur le rendez-vous du vendeur"} /></label>
+        {isR2 && <label>Notes pour R2<textarea name="r2Notes" rows="3" placeholder="Notes pour préparer le R2" /></label>}
+        <label>{personal ? "Commentaire" : "Instruction"}<textarea name="notes" rows="3" defaultValue={defaults.notes || ""} placeholder={personal ? "Détail visible sur l’agenda" : "Informations pour le vendeur"} /></label>
         {!personal && more && <>
           <label>Type<select name="appointmentType" defaultValue={defaults.appointmentType || APPOINTMENT_TYPES[0]}>{APPOINTMENT_TYPES.map(type => <option key={type}>{type}</option>)}</select></label>
           <label>Mode<select name="meetingMode" defaultValue={defaults.meetingMode || MEETING_MODES[0]}>{MEETING_MODES.map(mode => <option key={mode}>{mode}</option>)}</select></label>
           <label>Objet<input name="subject" defaultValue={defaults.subject || ""} /></label>
         </>}
         {!personal && <button type="button" className="agenda-more-toggle" onClick={() => setMore(current => !current)}>{more ? "Moins d’options" : "Plus d’options"}</button>}
-        <button className="primary submit" type="submit"><Plus size={16}/>{defaults.duplicate ? "Créer la copie" : "Enregistrer"}</button>
+        <button className="primary submit" type="submit"><Plus size={16}/>{isR2 ? "Créer le R2" : defaults.duplicate ? "Créer la copie" : "Enregistrer"}</button>
       </form>
     </div>
   </div>;

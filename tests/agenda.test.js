@@ -18,6 +18,7 @@ import {
   isOverdue,
   isAuxiliaryGoogleCalendar,
   googleCalendarsToImport,
+  keptAgendaColors,
   googleAgendaChoices,
   googleCalendarColor,
   isGoogleAgendaCalendarShown,
@@ -65,15 +66,14 @@ test("une formation se pose sans prospect et reste hors du suivi", () => {
   assert.equal(validateAppointmentPayload(formToAppointmentRecord({ kind: "autre", start: "2026-10-20T09:00:00.000Z" }, {})).some(item => /intitulé/i.test(item)), true);
 });
 
-test("le responsable commercial empile ses propres créneaux avant de les répartir", () => {
+test("un commercial peut recevoir plusieurs rendez-vous sur le même créneau", () => {
   const lead = { role: "Responsable commercial" };
   const seller = { role: "Commercial" };
   assert.equal(allowsStackedAgendaSlots(lead, "lead", "lead"), true);
-  assert.equal(allowsStackedAgendaSlots(lead, "lead", "seller"), false);
-  assert.equal(allowsStackedAgendaSlots(seller, "seller", "seller"), false);
-  assert.equal(allowsStackedAgendaSlots({ role: "Responsable prospection" }, "disp", "disp"), false);
-  assert.equal(allowsStackedAgendaSlots({ role: "Responsable prospection" }, "disp", "lead", "Responsable commercial"), true);
-  assert.equal(allowsStackedAgendaSlots({ role: "Responsable prospection" }, "disp", "seller", "Commercial"), false);
+  assert.equal(allowsStackedAgendaSlots(lead, "lead", "seller"), true);
+  assert.equal(allowsStackedAgendaSlots(seller, "seller", "seller"), true);
+  assert.equal(allowsStackedAgendaSlots({ role: "Responsable prospection" }, "disp", "seller", "Commercial"), true);
+  assert.equal(allowsStackedAgendaSlots({ role: "Responsable prospection" }, "disp", "", "Commercial"), false);
 });
 
 test("une creation de prospect exige une prochaine action", () => {
@@ -336,18 +336,23 @@ test("réattribution, numéro, déplacement, duplication et historique des rende
 test("le responsable attribue un rdv et chacun peut commenter le sien", () => {
   assert.equal(isAgendaAssignOrCommentPatch({ commercialId: "v1", notes: "Apporter le devis" }), true);
   assert.equal(isAgendaAssignOrCommentPatch({ notes: "Rappeler avant" }), true);
+  assert.equal(isAgendaAssignOrCommentPatch({ sellerComment: "Vu le client" }), true);
   assert.equal(isAgendaAssignOrCommentPatch({ start: "2026-10-05T09:00:00" }), false);
   assert.equal(canWriteAgendaComment({ role: "Responsable commercial" }, "lead", { commercialId: "seller" }), true);
   assert.equal(canWriteAgendaComment({ role: "Commercial" }, "seller", { commercialId: "seller" }), true);
   assert.equal(canWriteAgendaComment({ role: "Commercial" }, "seller", { commercialId: "other" }), false);
   const agenda = readFileSync(new URL("../app/components/commercial-agenda.js", import.meta.url), "utf8");
-  assert.match(agenda, /Commentaire/);
-  assert.match(agenda, /Vendeur/);
+  assert.match(agenda, /Instruction/);
+  assert.match(agenda, /Commentaire vendeur/);
+  assert.match(agenda, /event-instruction/);
+  assert.match(agenda, /sellerComment: sellerNote/);
+  assert.doesNotMatch(agenda, /notes: comment/);
   const page = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
   assert.match(page, /isAgendaAssignOrCommentPatch\(changes\)/);
   const patch = readFileSync(new URL("../app/api/appointments/[id]/route.js", import.meta.url), "utf8");
   assert.match(patch, /isAgendaAssignOrCommentPatch\(body\)/);
   assert.match(patch, /ne peut pas être modifié/);
+  assert.match(patch, /L’instruction du rendez-vous ne peut pas être modifiée/);
 });
 
 test("la synchro google lit tous les agendas du compte", () => {
@@ -496,6 +501,29 @@ test("l agenda retrouve la derniere configuration", () => {
   assert.match(agenda, /chooseView\("day"\)/);
   assert.match(agenda, /initialView !== "table"/);
   assert.match(agenda, /writeStoredLayout\(\{ anchor:/);
+  assert.doesNotMatch(agenda, /layout\.anchor/);
+  assert.match(agenda, /closeOpenMenus/);
+  assert.match(agenda, /summary>Agendas</);
+  assert.equal(readAgendaLayout({ view: "three" }).view, "three");
+  assert.match(agenda, /3 jours/);
+  assert.match(agenda, /chooseView\("three"\)/);
+  assert.match(agenda, /mkl-agenda-colors:/);
+});
+
+test("la couleur d un vendeur survit a la reconnexion", () => {
+  const remote = keptAgendaColors(
+    { colors: {}, colorsUpdatedAt: "" },
+    { colors: { byron: "#aa0000", bad: "rouge" }, colorsUpdatedAt: "2026-11-24T00:00:00.000Z" }
+  );
+  assert.deepEqual(remote.colors, { byron: "#aa0000" });
+  const local = keptAgendaColors(
+    { colors: { byron: "#00aa00" }, colorsUpdatedAt: "2026-11-24T01:00:00.000Z" },
+    { colors: { byron: "#aa0000" }, colorsUpdatedAt: "2026-11-24T00:00:00.000Z" }
+  );
+  assert.equal(local.colors.byron, "#00aa00");
+  const rest = readFileSync(new URL("../app/lib/supabase-rest.js", import.meta.url), "utf8");
+  assert.match(rest, /mkl-agenda-view:/);
+  assert.match(rest, /localKeySurvivesSessionCleanup/);
 });
 
 test("le cron de rappels exige un secret", () => {

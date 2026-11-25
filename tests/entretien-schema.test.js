@@ -248,12 +248,24 @@ test("les rapports de maintenance reprennent le prix du contrat sur la semaine e
   assert.equal(boards.month.rows.length, 3);
   assert.equal(boards.month.total, 270);
   assert.equal(boards.month.rows[0].amount, 90);
+  assert.equal(boards.month.rows.find(row => row.id === "v1").payment, "");
+  const marked = maintenanceReportBoards([
+    { id: "p1", date: "2026-11-02", client: "Jean Dupont", contract: "ENT-1", payment: "Payé" },
+    { id: "p2", date: "2026-11-03", client: "Marie Martin", contract: "ENT-2", payment: "Pas payé" },
+  ], contracts, { weekStart: "2026-11-02", month: "2026-11" });
+  assert.equal(marked.week.rows.find(row => row.id === "p1").payment, "paid");
+  assert.equal(marked.week.rows.find(row => row.id === "p2").payment, "unpaid");
   assert.equal(shiftMonthKey("2026-11", -1), "2026-10");
   assert.equal(shiftMonthKey("2026-01", -1), "2025-12");
   const screen = readFileSync(new URL("../app/components/entretien-module.js", import.meta.url), "utf8");
   assert.match(screen, /Rapports de la semaine/);
   assert.match(screen, /Rapports du mois/);
   assert.match(screen, /PRIX DU CONTRAT/);
+  assert.match(screen, /entretien-payment is-paid/);
+  assert.match(screen, /entretien-payment is-unpaid/);
+  assert.match(form, /name="payment"/);
+  assert.match(form, /Pas payé/);
+  assert.match(form, />Payé</);
   const tech = screen.slice(screen.indexOf("entretien-module entretien-tech"), screen.indexOf("\n  return (", screen.indexOf("entretien-module entretien-tech")));
   assert.doesNotMatch(tech, /Rapports de la semaine/);
 });

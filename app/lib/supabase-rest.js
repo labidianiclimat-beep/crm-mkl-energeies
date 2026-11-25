@@ -15,6 +15,13 @@ import { clearRolePreview, rolePreviewHeaders } from "./role-preview.js";
 const projectUrl=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim();
 const publishableKey=String(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||"").trim();
 const sessionKey="mkl-supabase-session";
+
+export function localKeySurvivesSessionCleanup(key) {
+  const name = String(key || "");
+  return name.startsWith("mkl-agenda-view:")
+    || name.startsWith("mkl-agenda-colors:")
+    || name.startsWith("mkl-google-agenda-show:");
+}
 let profilePromise;
 let refreshFlight;
 
@@ -78,7 +85,7 @@ function freeLocalStorageForSession() {
   const keys = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
-    if (key && key.startsWith("mkl-") && key !== sessionKey) keys.push(key);
+    if (key && key.startsWith("mkl-") && key !== sessionKey && !localKeySurvivesSessionCleanup(key)) keys.push(key);
   }
   keys.forEach(key => localStorage.removeItem(key));
 }

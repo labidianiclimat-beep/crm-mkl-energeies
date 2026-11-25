@@ -43,6 +43,20 @@ test("un prospect SQL se lit comme une fiche d'ecran", () => {
   assert.equal(ui.owner, "Sébastien Brun");
 });
 
+test("un prospect sans produit d'intérêt n'hérite pas du photovoltaïque", () => {
+  const ui = prospectToUi({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Lead Google",
+    source: "Prospect GG Ads",
+    project_type: null,
+    extra: {},
+  });
+  assert.equal(ui.type, "");
+  assert.deepEqual(ui.types, []);
+  const fields = readFileSync(new URL("../app/components/prospect-fields.js", import.meta.url), "utf8");
+  assert.doesNotMatch(fields, /type \|\| "Photovoltaïque"/);
+});
+
 test("la civilite Mr et Mme est enregistree sur le prospect", () => {
   const record = formToProspectRecord({
     name: "Martin",
@@ -104,6 +118,27 @@ test("la creation d un prospect rattache le rendez-vous avec le nom de la fiche"
   assert.equal(validateAppointmentPayload(record).some(item => /rattaché à un prospect/i.test(item)), false);
   const source = readFileSync(new URL("../app/api/prospects/route.js", import.meta.url), "utf8");
   assert.match(source, /prospectName: record\.name/);
+});
+
+test("un R2 reste marqué sur le rendez-vous créé", () => {
+  const created = formToAppointmentRecord({
+    prospectName: "Marie Laurent",
+    start: "2026-11-26T09:00:00.000Z",
+    visitRound: "R2",
+  }, {});
+  assert.equal(created.extra.visitRound, "R2");
+  const kept = formToAppointmentRecord({
+    prospectName: "Marie Laurent",
+    start: "2026-11-26T09:00:00.000Z",
+    visitRound: "R2",
+    status: "Confirmé",
+  }, {});
+  assert.equal(kept.extra.visitRound, "R2");
+  const plain = formToAppointmentRecord({
+    prospectName: "Marie Laurent",
+    start: "2026-11-26T09:00:00.000Z",
+  }, {});
+  assert.equal(plain.extra.visitRound, "");
 });
 
 test("un rendez-vous sans date est refuse", () => {
@@ -239,6 +274,9 @@ test("l origine Stand Carrefour et le prospecteur sont conserves", () => {
   assert.ok(PROSPECT_SOURCES.includes("Stand Carrefour"));
   assert.ok(PROSPECT_SOURCES.includes("Call Marrakech (Pros)"));
   assert.ok(PROSPECT_SOURCES.includes("Appel entrant"));
+  assert.ok(PROSPECT_SOURCES.includes("Contact Google"));
+  assert.ok(PROSPECT_SOURCES.includes("Contact Meta"));
+  assert.ok(PROSPECT_SOURCES.includes("Contact Effy"));
   const other = formToProspectRecord({
     name: "SCI Horizon",
     phone: "0612345678",
@@ -337,6 +375,9 @@ test("une fiche contact reste hors du tableau prospects tant que le statut n ava
   assert.equal(isContactSheetProspect(visit), false);
   assert.equal(isContactSheetProspect(contact, { kind: "rendez-vous" }), true);
   assert.equal(isContactSheetProspect({ desiredKind: "rendez-vous", stage: "À contacter" }, { kind: "rappel" }), false);
+  assert.equal(isContactSheetProspect({ desiredKind: "rappel", stage: "NRP" }), true);
+  assert.equal(isContactSheetProspect({ desiredKind: "rendez-vous", stage: "NRP" }), false);
+  assert.ok(PROSPECT_STAGES.includes("NRP"));
   const reminder = formToAppointmentRecord({
     prospectName: "Contact",
     start: "2026-10-13T09:00:00.000Z",
@@ -347,6 +388,9 @@ test("une fiche contact reste hors du tableau prospects tant que le statut n ava
   const choice = readFileSync(new URL("../app/components/prospect-next-action.js", import.meta.url), "utf8");
   assert.match(page, /Contacts \(\{contactCount\}\)/);
   assert.match(page, /Fiche contact/);
+  assert.match(page, /status \$\{p\.stage==="NRP"\?"nrp":"wait"\}/);
+  const fields = readFileSync(new URL("../app/components/prospect-fields.js", import.meta.url), "utf8");
+  assert.match(fields, /ne répond pas/);
   assert.match(choice, /Fiche contact/);
   assert.doesNotMatch(choice, /Rappel téléphonique/);
 });

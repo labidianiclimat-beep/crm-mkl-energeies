@@ -12,6 +12,7 @@ import {
   PROSPECT_SELECT,
   appointmentToUi,
   extraOf,
+  agendaCommentForSeller,
   formToAppointmentRecord,
   formToProspectRecord,
   isMissingCommercialTable,
@@ -26,6 +27,27 @@ import { attachProspectRdvStatuses } from "../../../lib/prospect-rdv-status-serv
 import { withAppointmentNames, withProspectNames } from "../../../lib/profile-names";
 
 export const runtime = "nodejs";
+
+async function copyProspectCommentToAppointments(orgId, prospectId, prospectNotes) {
+  const note = String(prospectNotes || "").trim();
+  if (!note || !prospectId) return;
+  const rows = await serviceRequest(
+    `/rest/v1/commercial_appointments?select=id,notes,extra&organization_id=eq.${encodeURIComponent(orgId)}&opportunity_id=eq.${encodeURIComponent(prospectId)}`
+  );
+  for (const row of rows || []) {
+    if (extraOf(row).source === "google") continue;
+    const next = agendaCommentForSeller(note, row.notes);
+    if (!next || next === String(row.notes || "").trim()) continue;
+    await serviceRequest(
+      `/rest/v1/commercial_appointments?id=eq.${encodeURIComponent(row.id)}&organization_id=eq.${encodeURIComponent(orgId)}`,
+      {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: { notes: next, updated_at: new Date().toISOString() },
+      }
+    );
+  }
+}
 
 async function loadOne(orgId, id) {
   const path = `/rest/v1/commercial_opportunities?select=${PROSPECT_SELECT}&organization_id=eq.${encodeURIComponent(orgId)}&id=eq.${encodeURIComponent(id)}&limit=1`;
@@ -156,7 +178,7 @@ export async function PATCH(request, { params }) {
         city: record.city,
         type: record.project_type,
         commercialId: record.commercial_id || current.commercialId || "",
-        notes: body.appointmentNotes || current.notes || "",
+        notes: agendaCommentForSeller(body.notes ?? kept.notes, body.appointmentNotes || current.notes || ""),
         phone: body.appointmentPhone || body.phone || current.phone || "",
         status: current.status || "",
         reminderOffsets: [1440, 120, 30].filter(value => body[`reminder_${value}`] === "on" || body[`reminder_${value}`] === true),
@@ -229,6 +251,7 @@ export async function PATCH(request, { params }) {
         }
       ).catch(() => {});
     }
+    await copyProspectCommentToAppointments(auth.profile.organization_id, id, updated.notes);
 
     await logActivity({
       ...actorFromAuth(auth),

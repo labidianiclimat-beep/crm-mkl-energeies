@@ -14,9 +14,10 @@ import {
   notifyUser,
   writeAppointmentHistory,
 } from "../../lib/google-calendar";
-import { commercialScopeQuery, loadPrivateAgendaOwnerIds, loadTeamMemberIds } from "../../lib/team-scope";
+import { commercialScopeQuery, loadAgendaScopeIds, loadPrivateAgendaOwnerIds, loadTeamMemberIds } from "../../lib/team-scope";
 import { isProspectDispatcher } from "../../lib/prospect-dispatch";
-import { resolveScopedCommercialIds, visibleAgendaAppointment, visibleAgendaRowForViewer } from "../../lib/scoping";
+import { buildCommercialScopeFilter, hiddenAgendaOwnerFilter, resolveScopedCommercialIds, visibleAgendaAppointment, visibleAgendaRowForViewer } from "../../lib/scoping";
+import { isAdminVipRole } from "../../lib/roles";
 import { canSignCommercialOrder, normalizeAgendaStatus, ORDER_SIGN_DENIED } from "../../lib/appointment-status";
 import { notifyProspectOfAppointment } from "../../lib/prospect-appointment-mail";
 import { agendaStackAllowed, claimProspectForAppointment } from "../../lib/prospect-assign";
@@ -48,10 +49,11 @@ export async function GET(request) {
     const commercialId = url.searchParams.get("commercialId") || "";
     const kind = url.searchParams.get("kind") || "";
     const forDispatch = isProspectDispatcher(auth.profile);
-    const teamIds = await loadTeamMemberIds(auth.profile, auth.user.id, { forDispatch });
-    const scoped = resolveScopedCommercialIds(auth.profile, auth.user.id, teamIds || [], { forDispatch });
-    let path = `/rest/v1/commercial_appointments?select=${APPOINTMENT_SELECT}&organization_id=eq.${encodeURIComponent(orgId)}&order=starts_at.asc`;
-    path += await commercialScopeQuery(auth.profile, auth.user.id, ["commercial_id", "created_by"], { forDispatch });
+    const scoped = await loadAgendaScopeIds(auth.profile, auth.user.id, { forDispatch });
+    const privateOwners = await loadPrivateAgendaOwnerIds(orgId);
+    let path = `/rest/v1/commercial_appointments?select=${APPOINTMENT_SELECT}&organization_id=eq.${encodeURIComponent(orgId)}&order=starts_at.asc,id.asc`;
+    path += buildCommercialScopeFilter(["commercial_id", "created_by"], scoped);
+    if (scoped == null && !isAdminVipRole(auth.profile.role)) path += hiddenAgendaOwnerFilter(privateOwners);
     if (commercialId) {
       if (scoped && !scoped.map(String).includes(String(commercialId))) {
         return Response.json({ error: "Ce commercial ne fait pas partie de votre équipe." }, { status: 403 });
@@ -60,7 +62,6 @@ export async function GET(request) {
     }
 
     const rows = await listAllRows(path);
-    const privateOwners = await loadPrivateAgendaOwnerIds(orgId);
     const visibleRows = (rows || []).filter(row => visibleAgendaRowForViewer(row, scoped, auth.profile, privateOwners));
     let appointments = await withAppointmentNames(visibleRows);
     if (kind) appointments = appointments.filter(item => item.kind === kind);

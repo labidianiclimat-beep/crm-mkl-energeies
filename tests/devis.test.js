@@ -568,6 +568,9 @@ test("l adresse de chantier reste hors du carre client", () => {
   assert.match(pdf, /ADRESSE DE CHANTIER/);
   assert.match(print, /Adresse de chantier/);
   assert.match(print, /worksite-address/);
+  const edit = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.match(edit, /L’adresse du chantier est différente de l’adresse du client/);
+  assert.match(edit, /siteDifferent:d\.siteDifferent==="true"/);
 });
 
 test("la page devis filtre par client, commercial et statut, et dit Validé", () => {

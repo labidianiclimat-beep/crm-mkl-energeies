@@ -1,5 +1,6 @@
 import { requireApiSession, canInviteUsers } from "../../../lib/api-auth";
 import { issueAndSendLoginPin, mailErrorMessage } from "../../../lib/user-login-pin";
+import { persistProfileAccess } from "../../../lib/roles";
 import {
   ensureAuthUser,
   getProfileByEmailService,
@@ -71,9 +72,15 @@ export async function POST(request) {
     if (!profile) {
       const resolvedRole = role || "Commercial";
       const resolvedName = name || normalizedEmail.split("@")[0];
-      const resolvedModules = Array.isArray(modules) && modules.length
-        ? modules
-        : ROLE_DEFAULT_MODULES[resolvedRole] || ROLE_DEFAULT_MODULES.Commercial;
+      const resolvedModules = persistProfileAccess({
+        modules: Array.isArray(modules) && modules.length
+          ? modules
+          : ROLE_DEFAULT_MODULES[resolvedRole] || ROLE_DEFAULT_MODULES.Commercial,
+        actions: [],
+        role: resolvedRole,
+        existingModules: [],
+        actorRole: auth.profile.role,
+      });
 
       const authUser = await ensureAuthUser({
         email: normalizedEmail,

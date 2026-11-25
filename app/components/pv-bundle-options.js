@@ -1,6 +1,6 @@
 "use client";
 
-import { PV_BATTERY_OPTION, PV_CONNECTION_OPTIONS, PV_OPTIMIZER_OPTION, applyPvBundleOptions, selectedPvOptions } from "../lib/pv-quote-options";
+import { PV_BATTERY_INSTALL, PV_BATTERY_OPTION, PV_CONNECTION_OPTIONS, PV_OPTIMIZER_OPTION, applyPvBundleOptions, selectedPvOptions } from "../lib/pv-quote-options";
 
 const money = value =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(Number(value || 0));
@@ -29,7 +29,7 @@ export default function PvBundleOptions({ items = [], index = 0, articles = [], 
       <label>Batterie
         <select aria-label="Batterie Marstek" value={selected.battery} onChange={event => choose("battery", event.target.value)}>
           <option value="">Choisir</option>
-          <option value={PV_BATTERY_OPTION.id}>{PV_BATTERY_OPTION.name} — {money(PV_BATTERY_OPTION.ttc)} TTC</option>
+          <option value={PV_BATTERY_OPTION.id}>{PV_BATTERY_OPTION.name} — {money(PV_BATTERY_INSTALL.packageTtc)} TTC</option>
         </select>
       </label>
     </div>

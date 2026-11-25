@@ -158,3 +158,26 @@ test("la prise en charge, l’attente, le contrôle et la clôture suivent les m
   assert.equal(availableSavActions({ ...fresh, status: "new" }, { userId: OWNER }).includes("accept"), true);
   assert.equal(availableSavActions({ ...fresh, status: "new" }, { userId: CREATOR, canManage: true }).includes("accept"), false);
 });
+
+test("un dossier se marque à facturer, même déjà clôturé", () => {
+  const now = new Date("2026-10-04T10:00:00.000Z");
+  const closed = {
+    id: CASE_ID,
+    number: 4,
+    subject: "Fuite",
+    status: "closed",
+    owner_id: OWNER,
+    created_by: CREATOR,
+    to_invoice: false,
+  };
+  const marked = decideSavAction(closed, "invoice", { userId: CREATOR, canManage: true, now });
+  assert.equal(marked.ok, true);
+  assert.equal(marked.patch.to_invoice, true);
+  assert.equal(marked.event.kind, "to_invoice");
+  assert.equal(marked.patch.status, undefined);
+  const again = decideSavAction({ ...closed, ...marked.patch }, "invoice", { userId: CREATOR, canManage: true, now });
+  assert.match(again.error, /déjà à facturer/);
+  assert.match(decideSavAction({ ...closed, status: "cancelled" }, "invoice", { userId: CREATOR, canManage: true, now }).error, /annulé/);
+  assert.equal(availableSavActions(closed, { userId: CREATOR, canManage: true }).includes("invoice"), true);
+  assert.equal(availableSavActions({ ...closed, to_invoice: true }, { userId: CREATOR, canManage: true }).includes("invoice"), false);
+});

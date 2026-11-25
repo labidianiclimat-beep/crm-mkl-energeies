@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { PV_QUOTE_SIZES, bundleMatchesPvSize, bundleUsesMicroInverter } from "../app/lib/pv-quote-sizes.js";
+import { PV_QUOTE_SIZES, bundleMatchesPvSize, bundleUsesMicroInverter, isStandaloneBatteryGroup } from "../app/lib/pv-quote-sizes.js";
 
 test("les puissances comptent les panneaux", () => {
   assert.deepEqual(
@@ -61,6 +61,28 @@ test("le devis ouvre la page des puissances avant les groupes", () => {
   assert.match(wizard, /pv-size-panels/);
   assert.match(wizard, /Photovoltaïque — onduleur centralisé/);
   assert.match(wizard, /Micro-onduleur/);
+  assert.match(wizard, /pv-battery-groups/);
+  assert.match(wizard, /isStandaloneBatteryGroup/);
+});
+
+test("un groupe batterie se choisit sans puissance de panneaux", () => {
+  const battery = {
+    name: "BAT-MARTEK VENUS-E",
+    category: "Photovoltaïque",
+    subcategory: "Batteries",
+    family: "Batteries",
+    items: [
+      { name: "BAT-MARTEK VENUS-E", subcategory: "Batteries", qty: 1 },
+      { name: "Installation de batterie Marstek", subcategory: "Batteries", qty: 1 },
+    ],
+  };
+  assert.equal(isStandaloneBatteryGroup(battery), true);
+  assert.equal(PV_QUOTE_SIZES.some(size => bundleMatchesPvSize(battery, size)), false);
+  assert.equal(isStandaloneBatteryGroup({
+    name: "Pack 6 kW monophasé",
+    category: "Photovoltaïque",
+    subcategory: "Onduleurs",
+  }), false);
 });
 
 test("un groupe micro-onduleur se distingue de l onduleur centralisé", () => {

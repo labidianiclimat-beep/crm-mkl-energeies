@@ -184,7 +184,8 @@ test("le devis n attache plus les CGV ni la mention MENTION", () => {
   assert.doesNotMatch(wizard, /<b>MENTION<\/b>/);
   assert.doesNotMatch(print, /<b>MENTION<\/b>/);
   assert.doesNotMatch(print, /CGV MKL Énergies \$\{/);
-  assert.match(print, /companyHasCgv/);
+  assert.match(print, /quotePrintsCgv/);
+  assert.match(print, /insertCgvAfterQuote/);
   assert.match(print, /collectDevisAnnexImages/);
   assert.match(print, /CONDITIONS PARTICULIÈRES/);
 });
@@ -239,4 +240,18 @@ test("la liste des devis passe le catalogue au telechargement", () => {
   assert.match(page, /function BillingView\(\{kind,documents,clients,articles=\[\]/);
   assert.match(page, /kind="Devis"[^\n]+articles=\{articles\}/);
   assert.match(page, /openDevisPrintWindow\(doc, \{ clients, articles, toast \}\)/);
+});
+
+test("l enregistrement d un devis propose l envoi par mail", () => {
+  const wizard = readFileSync(new URL("../app/components/devis-wizard.js", import.meta.url), "utf8");
+  const route = readFileSync(new URL("../app/api/devis/[id]/send/route.js", import.meta.url), "utf8");
+  assert.match(wizard, /clientNotifyEmail/);
+  assert.match(wizard, /Souhaitez-vous envoyer le devis/);
+  assert.match(wizard, /Ne pas envoyer/);
+  assert.match(wizard, /Envoyer par e-mail/);
+  assert.match(wizard, /\/api\/devis\/\$\{done\.id\}\/send/);
+  assert.doesNotMatch(wizard, /sera branché comme la pro forma/);
+  assert.doesNotMatch(wizard, /window\.confirm/);
+  assert.match(route, /buildStoredDevisPdf/);
+  assert.match(route, /buildDevisEmail/);
 });

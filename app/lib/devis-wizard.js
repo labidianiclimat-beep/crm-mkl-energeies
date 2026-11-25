@@ -7,6 +7,8 @@ import {
   splitPersonName,
   todayIsoDate,
 } from "./devis.js";
+import { domofinanceBlocker, domofinanceIsCurrent, isDomofinanceCredit } from "./domofinance.js";
+import { isProjexioCredit, projexioBlocker, projexioFirstMonthlyDays, projexioIsCurrent } from "./projexio.js";
 import { housingFromPerson } from "./housing.js";
 
 export { HOUSING_TYPES, OCCUPANCY_TYPES } from "./housing.js";
@@ -142,6 +144,43 @@ export function emptyWizardState({
     personalContribution: "",
     financeFileNumber: "",
     financeStatus: "À constituer",
+    domofinanceMaterialId: "",
+    domofinanceMaterialName: "",
+    domofinanceMinAmount: "",
+    domofinanceMaxAmount: "",
+    domofinancePostponeAvailable: false,
+    domofinanceModality: "normal",
+    domofinancePostpone: false,
+    borrowerBirthDate: "",
+    borrowerInActivity: true,
+    borrowerInsurance: "DIM",
+    hasCoborrower: false,
+    coborrowerBirthDate: "",
+    coborrowerInActivity: true,
+    coborrowerInsurance: "none",
+    domofinanceApplied: false,
+    domofinanceFingerprint: "",
+    domofinanceMonthlyExInsurance: "",
+    domofinanceCreditCost: "",
+    domofinanceSellerRetention: "",
+    domofinanceSellerRetentionRate: "",
+    projexioBareme: "",
+    projexioMinAmount: "",
+    projexioMaxAmount: "",
+    projexioEcheanceMin: "",
+    projexioEcheanceMax: "",
+    projexioInsuranceRate: "",
+    projexioApplied: false,
+    projexioFingerprint: "",
+    projexioMonthlyExInsurance: "",
+    projexioReportMonths: "",
+    projexioCreditCost: "",
+    projexioFileFees: "",
+    projexioLastMonthly: "",
+    projexioExample: "",
+    projexioInsuranceInfo: "",
+    projexioPedago: "",
+    projexioMentions: "",
     installmentCount: 3,
     installmentAmount: "",
     installmentDates: [],
@@ -221,8 +260,45 @@ export function documentToWizardState(doc, { clients = [], prospects = [] } = {}
     financeTaea: doc.financeTaea ?? "",
     firstMonthlyPayment: doc.firstMonthlyPayment ?? "",
     personalContribution: doc.personalContribution ?? "",
-    financeFileNumber: doc.financeFileNumber || "",
+    financeFileNumber: doc.number || "",
     financeStatus: doc.financeStatus || "À constituer",
+    domofinanceMaterialId: doc.domofinanceMaterialId || "",
+    domofinanceMaterialName: doc.domofinanceMaterialName || "",
+    domofinanceMinAmount: doc.domofinanceMinAmount ?? "",
+    domofinanceMaxAmount: doc.domofinanceMaxAmount ?? "",
+    domofinancePostponeAvailable: Boolean(doc.domofinancePostponeAvailable),
+    domofinanceModality: doc.domofinanceModality || "normal",
+    domofinancePostpone: Boolean(doc.domofinancePostpone),
+    borrowerBirthDate: doc.borrowerBirthDate || "",
+    borrowerInActivity: doc.borrowerInActivity === undefined ? true : Boolean(doc.borrowerInActivity),
+    borrowerInsurance: doc.borrowerInsurance || "DIM",
+    hasCoborrower: Boolean(doc.hasCoborrower),
+    coborrowerBirthDate: doc.coborrowerBirthDate || "",
+    coborrowerInActivity: doc.coborrowerInActivity === undefined ? true : Boolean(doc.coborrowerInActivity),
+    coborrowerInsurance: doc.coborrowerInsurance || "none",
+    domofinanceApplied: Boolean(doc.domofinanceApplied),
+    domofinanceFingerprint: doc.domofinanceFingerprint || "",
+    domofinanceMonthlyExInsurance: doc.domofinanceMonthlyExInsurance ?? "",
+    domofinanceCreditCost: doc.domofinanceCreditCost ?? "",
+    domofinanceSellerRetention: doc.domofinanceSellerRetention ?? "",
+    domofinanceSellerRetentionRate: doc.domofinanceSellerRetentionRate ?? "",
+    projexioBareme: doc.projexioBareme || "",
+    projexioMinAmount: doc.projexioMinAmount ?? "",
+    projexioMaxAmount: doc.projexioMaxAmount ?? "",
+    projexioEcheanceMin: doc.projexioEcheanceMin ?? "",
+    projexioEcheanceMax: doc.projexioEcheanceMax ?? "",
+    projexioInsuranceRate: doc.projexioInsuranceRate ?? "",
+    projexioApplied: Boolean(doc.projexioApplied),
+    projexioFingerprint: doc.projexioFingerprint || "",
+    projexioMonthlyExInsurance: doc.projexioMonthlyExInsurance ?? "",
+    projexioReportMonths: doc.projexioReportMonths ?? "",
+    projexioCreditCost: doc.projexioCreditCost ?? "",
+    projexioFileFees: doc.projexioFileFees ?? "",
+    projexioLastMonthly: doc.projexioLastMonthly ?? "",
+    projexioExample: doc.projexioExample || "",
+    projexioInsuranceInfo: doc.projexioInsuranceInfo || "",
+    projexioPedago: doc.projexioPedago || "",
+    projexioMentions: doc.projexioMentions || "",
     installmentCount: Number(doc.installmentCount || 3),
     installmentAmount: doc.installmentAmount ?? "",
     installmentDates: Array.isArray(doc.installmentDates) ? doc.installmentDates : [],
@@ -301,6 +377,10 @@ export function stepErrors(stepId, state, { mustAssignCommercial = false } = {})
     if (!FINANCE_MODES.some(mode => mode.id === state.financeMode)) errors.push("Choisissez un mode de financement.");
     const financeError = financeConsistencyError(state, totals.totalTTC);
     if (financeError) errors.push(financeError);
+    const domoError = domofinanceBlocker(state, totals.totalTTC);
+    if (domoError) errors.push(domoError);
+    const projexioError = projexioBlocker(state, totals.totalTTC);
+    if (projexioError) errors.push(projexioError);
   }
   if (stepId === "summary") {
     for (const step of ["client", "products", "conditions", "finance"]) {
@@ -326,6 +406,8 @@ export function wizardToPayload(state, { status = "Brouillon", statusComment = "
   const financier = state.financeMode === "credit"
     ? (state.financier && state.financier !== "Sans financement" ? state.financier : "Autre financeur")
     : "Sans financement";
+  const domoCurrent = isDomofinanceCredit(state) && domofinanceIsCurrent(state, totals.totalTTC);
+  const projexioCurrent = isProjexioCredit(state) && projexioIsCurrent(state, totals.totalTTC);
   return {
     kind: "Devis",
     clientId: state.clientId || null,
@@ -344,13 +426,29 @@ export function wizardToPayload(state, { status = "Brouillon", statusComment = "
     label: state.label || items.map(item => item.name).filter(Boolean).join(", ") || "Devis",
     items,
     financier,
-    financedAmount: state.financeMode === "credit" ? Number(totals.totalTTC.toFixed(2)) : "",
+    financedAmount: state.financeMode !== "credit"
+      ? ""
+      : domoCurrent || projexioCurrent
+        ? Number(state.financedAmount)
+        : Number(totals.totalTTC.toFixed(2)),
     financeMonths: state.financeMode === "credit" || state.financeMode === "installments" ? state.financeMonths || state.installmentCount : "",
     monthlyPayment: state.financeMode === "credit" ? state.monthlyPayment : state.installmentAmount,
-    financeNominalRate: "",
+    financeNominalRate: state.financeMode === "credit" ? state.financeNominalRate : "",
     financeTaeg: state.financeMode === "credit" ? state.financeTaeg : "",
-    financeTaea: state.financeMode === "credit" ? state.financeTaea : "",
-    firstMonthlyPayment: state.financeMode === "credit" ? state.firstMonthlyPayment : "",
+    financeTaea: state.financeMode !== "credit"
+      ? ""
+      : isProjexioCredit(state)
+        ? (state.financeTaea !== "" && state.financeTaea != null
+          ? state.financeTaea
+          : state.projexioInsuranceRate === "" || state.projexioInsuranceRate == null
+            ? ""
+            : Number(state.projexioInsuranceRate))
+        : state.financeTaea,
+    firstMonthlyPayment: state.financeMode !== "credit"
+      ? ""
+      : isProjexioCredit(state) && state.projexioBareme
+        ? projexioFirstMonthlyDays(state.projexioBareme)
+        : state.firstMonthlyPayment,
     electricityOperator: state.electricityOperator || "",
     pvPowerKwp: state.pvPowerKwp || "",
     representativeLastName: state.representativeLastName || "",
@@ -379,8 +477,45 @@ export function wizardToPayload(state, { status = "Brouillon", statusComment = "
     printHeatPumpFicheIds: [],
     printCommercialDocIds: Array.isArray(state.printCommercialDocIds) ? state.printCommercialDocIds : undefined,
     financeStatus: state.financeStatus,
-    financeFileNumber: state.financeFileNumber,
+    financeFileNumber: state.financeMode === "credit" ? (state.number || "") : "",
     personalContribution: state.personalContribution,
+    domofinanceMaterialId: state.domofinanceMaterialId,
+    domofinanceMaterialName: state.domofinanceMaterialName,
+    domofinanceMinAmount: state.domofinanceMinAmount,
+    domofinanceMaxAmount: state.domofinanceMaxAmount,
+    domofinancePostponeAvailable: Boolean(state.domofinancePostponeAvailable),
+    domofinanceModality: state.domofinanceModality,
+    domofinancePostpone: Boolean(state.domofinancePostpone),
+    borrowerBirthDate: state.borrowerBirthDate,
+    borrowerInActivity: Boolean(state.borrowerInActivity),
+    borrowerInsurance: state.borrowerInsurance,
+    hasCoborrower: Boolean(state.hasCoborrower),
+    coborrowerBirthDate: state.coborrowerBirthDate,
+    coborrowerInActivity: Boolean(state.coborrowerInActivity),
+    coborrowerInsurance: state.coborrowerInsurance,
+    domofinanceApplied: Boolean(state.domofinanceApplied),
+    domofinanceFingerprint: state.domofinanceFingerprint,
+    domofinanceMonthlyExInsurance: state.domofinanceMonthlyExInsurance,
+    domofinanceCreditCost: state.domofinanceCreditCost,
+    domofinanceSellerRetention: state.domofinanceSellerRetention,
+    domofinanceSellerRetentionRate: state.domofinanceSellerRetentionRate,
+    projexioBareme: state.projexioBareme,
+    projexioMinAmount: state.projexioMinAmount,
+    projexioMaxAmount: state.projexioMaxAmount,
+    projexioEcheanceMin: state.projexioEcheanceMin,
+    projexioEcheanceMax: state.projexioEcheanceMax,
+    projexioInsuranceRate: state.projexioInsuranceRate,
+    projexioApplied: Boolean(state.projexioApplied),
+    projexioFingerprint: state.projexioFingerprint,
+    projexioMonthlyExInsurance: state.projexioMonthlyExInsurance,
+    projexioReportMonths: state.projexioReportMonths,
+    projexioCreditCost: state.projexioCreditCost,
+    projexioFileFees: state.projexioFileFees,
+    projexioLastMonthly: state.projexioLastMonthly,
+    projexioExample: state.projexioExample,
+    projexioInsuranceInfo: state.projexioInsuranceInfo,
+    projexioPedago: state.projexioPedago,
+    projexioMentions: state.projexioMentions,
     installmentCount: state.installmentCount,
     installmentDates: state.installmentDates,
     installmentAmount: state.installmentAmount,

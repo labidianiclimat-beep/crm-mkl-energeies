@@ -28,6 +28,7 @@ import DirectorySearch from "./directory-search";
 import HousingFields from "./housing-fields";
 import { housingFromPerson } from "../lib/housing";
 import SignaturePad from "./signature-pad";
+import { clientNotifyEmail } from "../lib/devis-mail";
 import { authFetch } from "../lib/supabase-rest";
 import { visibleProspects } from "../lib/prospect-to-client";
 import { formatClientNumber } from "../lib/client-number";
@@ -68,6 +69,10 @@ import { buildCerfaTvaData, quoteHasVat55 } from "../lib/cerfa-tva";
 import { buildAnahMandatData, quoteHasAirEauHeatPump } from "../lib/anah-mandat";
 import { buildPvMandatData, quoteHasPhotovoltaic } from "../lib/pv-mandat";
 import { downloadArticleCommercialDoc, quoteCommercialDocs } from "../lib/article-commercial-doc";
+import DomofinanceSimulator from "./domofinance-simulator";
+import ProjexioSimulator from "./projexio-simulator";
+import { DOMOFINANCE_NAME, clearDomofinanceResult, domofinanceBlocker } from "../lib/domofinance";
+import { PROJEXIO_NAME, clearProjexioResult, projexioBlocker } from "../lib/projexio";
 
 const euro = value =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(Number(value || 0));
@@ -157,6 +162,11 @@ export default function DevisWizard({
   const applyVoiceRef = useRef(() => {});
   const [done, setDone] = useState(null);
   const [printTarget, setPrintTarget] = useState(null);
+  const [mailTarget, setMailTarget] = useState(null);
+  const [mailOffer, setMailOffer] = useState(false);
+  const [mailNotice, setMailNotice] = useState("");
+  const [mailSent, setMailSent] = useState(false);
+  const [mailBusy, setMailBusy] = useState(false);
   const [openQuotes, setOpenQuotes] = useState(() =>
     resumeDocument
       ? []
@@ -239,6 +249,9 @@ export default function DevisWizard({
   const currentStep = WIZARD_STEPS[state.step] || WIZARD_STEPS[0];
   const errors = stepErrors(currentStep.id, state, { mustAssignCommercial });
   const financeError = financeConsistencyError(state, totals.totalTTC);
+  const domoBlocker = domofinanceBlocker(state, totals.totalTTC);
+  const projexioBlockerMessage = projexioBlocker(state, totals.totalTTC);
+  const automatedFinance = state.financier === DOMOFINANCE_NAME || state.financier === PROJEXIO_NAME;
 
   useEffect(() => {
     const recipientId = state.clientId || state.prospectId;
@@ -292,13 +305,14 @@ export default function DevisWizard({
       ...current,
       draftId: document.id,
       number: document.number || current.number,
+      financeFileNumber: document.number || current.number || "",
       status: document.status || current.status,
       clientId: document.clientId || current.clientId,
       prospectId: "",
       clientSnapshot: data.client || current.clientSnapshot,
     }));
     onSaved?.(document, { convertedProspectId: data.convertedProspectId, client: data.client });
-    return document;
+    return { document, client: data.client || snapshot.clientSnapshot || null };
   }
 
   function rejectRecipient() {
@@ -398,8 +412,8 @@ export default function DevisWizard({
     setBusy("draft");
     setNotice("");
     try {
-      const document = await persist({ status: "Brouillon", statusComment: "Enregistré comme brouillon" });
-      if (document) toast?.(`Brouillon enregistré — ${document.number || ""}`.trim());
+      const saved = await persist({ status: "Brouillon", statusComment: "Enregistré comme brouillon" });
+      if (saved?.document) toast?.(`Brouillon enregistré — ${saved.document.number || ""}`.trim());
     } catch (error) {
       setNotice(String(error.message || "Échec de sauvegarde"));
     } finally {
@@ -411,10 +425,19 @@ export default function DevisWizard({
     setBusy("validate");
     setNotice("");
     try {
-      const document = await persist({ status: "À valider", statusComment: "Création du devis", validate: true });
-      if (document) {
-        setDone(document);
-        setPrintTarget(document);
+      const saved = await persist({ status: "À valider", statusComment: "Création du devis", validate: true });
+      if (saved?.document) {
+        setDone(saved.document);
+        const email = clientNotifyEmail(saved.client);
+        const person = saved.client || {};
+        setMailTarget(email ? {
+          email,
+          name: person.name || saved.document.client || "Le client",
+        } : null);
+        setMailOffer(Boolean(email));
+        setMailNotice("");
+        setMailSent(false);
+        if (!email) setMailNotice("Ce client n’a pas d’adresse e-mail.");
       }
     } catch (error) {
       setNotice(String(error.message || "Validation impossible. Les informations sont conservées."));
@@ -426,6 +449,29 @@ export default function DevisWizard({
   function preview(doc = null) {
     const payload = doc || { ...wizardToPayload(state, { status: state.status || "Brouillon" }), number: state.number || "Aperçu" };
     setPrintTarget(payload);
+  }
+
+  async function sendDevisMail() {
+    if (!done?.id || !mailTarget?.email) {
+      setMailNotice("Ce client n’a pas d’adresse e-mail.");
+      return;
+    }
+    setMailBusy(true);
+    setMailNotice("");
+    try {
+      const response = await authFetch(`/api/devis/${done.id}/send`, { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Envoi impossible");
+      setMailOffer(false);
+      setMailSent(true);
+      if (data.status && data.status !== done.status) onSaved?.({ ...done, status: data.status });
+      toast?.(`Devis envoyé à ${data.to || mailTarget.email}`);
+    } catch (error) {
+      setMailNotice(String(error.message || "Envoi impossible"));
+      setMailOffer(true);
+    } finally {
+      setMailBusy(false);
+    }
   }
 
   if (done) {
@@ -447,13 +493,28 @@ export default function DevisWizard({
             <p>{done.client}</p>
             <b>{euro(done.totalTTC)}</b>
           </div>
+          {mailOffer && mailTarget && (
+            <div className="devis-mail-ask" role="dialog" aria-modal="true" aria-label="Envoyer le devis par e-mail">
+              <section>
+                <h3>Envoyer le devis par e-mail ?</h3>
+                <p>Souhaitez-vous envoyer le devis {done.number} à {mailTarget.name}, {mailTarget.email} ?</p>
+                <p>Le devis est enregistré. Le mail part seulement si vous choisissez de l’envoyer.</p>
+                {mailNotice && <p className="notice">{mailNotice}</p>}
+                <div className="actions">
+                  <button type="button" onClick={() => { setMailOffer(false); setMailNotice(""); }} disabled={mailBusy}>Ne pas envoyer</button>
+                  <button type="button" className="primary" onClick={sendDevisMail} disabled={mailBusy}>{mailBusy ? "Envoi…" : "Envoyer par e-mail"}</button>
+                </div>
+              </section>
+            </div>
+          )}
           <div className="devis-wizard-done-actions">
             <button type="button" className="primary" onClick={() => { onOpenDocument?.(done); onClose?.(); }}><FileText size={16} />Ouvrir le devis</button>
             <button type="button" className="secondary" onClick={() => setPrintTarget(done)}><Download size={16} />Télécharger le PDF</button>
-            <button type="button" className="secondary" onClick={() => toast?.("L’envoi e-mail du devis sera branché comme la pro forma.")}><Mail size={16} />Envoyer au client</button>
-            <button type="button" className="secondary" onClick={() => setPrintTarget(done)}><PenLine size={16} />Faire signer</button>
+            <button type="button" className="secondary" onClick={() => mailTarget ? setMailOffer(true) : setMailNotice("Ce client n’a pas d’adresse e-mail.")}><Mail size={16} />{mailSent ? "Renvoyer au client" : "Envoyer au client"}</button>
+            <button type="button" className="secondary" onClick={() => { onOpenDocument?.(done); onClose?.(); }}><PenLine size={16} />Soumettre à la validation</button>
             <button type="button" className="secondary" onClick={() => { onDuplicate?.(done); onClose?.(); }}><Copy size={16} />Dupliquer</button>
             <button type="button" onClick={() => { onOpenDocument?.(done); onClose?.(); }}>Revenir à la liste des devis</button>
+            {!mailOffer && mailNotice && <p className="devis-mail-notice">{mailNotice}</p>}
           </div>
         </section>
         {printTarget && (
@@ -916,8 +977,9 @@ export default function DevisWizard({
                         {DEVIS_FINANCIERS.filter(name => name !== "Sans financement").map(name => <option key={name}>{name}</option>)}
                       </select>
                     </label>
-                    <label>Montant de financement<input type="number" min="0" step="0.01" readOnly value={Number(totals.totalTTC.toFixed(2))} /></label>
-                    <label>Apport personnel<input type="number" min="0" step="0.01" value={state.personalContribution} onChange={event => patch({ personalContribution: event.target.value })} /></label>
+                    {!automatedFinance && <label>Montant de financement<input type="number" min="0" step="0.01" readOnly value={Number(totals.totalTTC.toFixed(2))} /></label>}
+                    <label>Apport personnel<input type="number" min="0" step="0.01" value={state.personalContribution} onChange={event => patch(state.financier === DOMOFINANCE_NAME ? clearDomofinanceResult({ personalContribution: event.target.value }) : state.financier === PROJEXIO_NAME ? clearProjexioResult({ personalContribution: event.target.value }) : { personalContribution: event.target.value })} /></label>
+                    {!automatedFinance && <>
                     <label>Durée (mois)<input type="number" min="1" value={state.financeMonths} onChange={event => patch({ financeMonths: event.target.value })} /></label>
                     <label>Mensualité<input type="number" min="0" step="0.01" value={state.monthlyPayment} onChange={event => patch({ monthlyPayment: event.target.value })} /></label>
                     <label>Première mensualité JRS
@@ -927,16 +989,29 @@ export default function DevisWizard({
                     </label>
                     <label>TAEG (%)<input type="number" min="0" step="0.01" value={state.financeTaeg} onChange={event => patch({ financeTaeg: event.target.value })} /></label>
                     <label>TAEA (%)<input type="number" min="0" step="0.01" value={state.financeTaea} onChange={event => patch({ financeTaea: event.target.value })} /></label>
-                    <label>Numéro du dossier<input value={state.financeFileNumber} onChange={event => patch({ financeFileNumber: event.target.value })} /></label>
+                    </>}
+                    <label>Numéro du dossier<input readOnly value={state.number || ""} placeholder="Numéro du devis, attribué à l’enregistrement" /></label>
                     <label>Statut du financement
                       <select value={state.financeStatus} onChange={event => patch({ financeStatus: event.target.value })}>
                         {FINANCE_STATUSES.map(status => <option key={status}>{status}</option>)}
                       </select>
                     </label>
                   </div>
+                  {state.financier === DOMOFINANCE_NAME && (
+                    <DomofinanceSimulator
+                      state={state}
+                      patch={patch}
+                      totalTTC={totals.totalTTC}
+                      items={filledQuoteItems(state.items)}
+                      articles={articles}
+                    />
+                  )}
+                  {state.financier === PROJEXIO_NAME && (
+                    <ProjexioSimulator state={state} patch={patch} totalTTC={totals.totalTTC} />
+                  )}
                 </WizardSection>
               )}
-              {financeError && <p className="devis-wizard-alert"><AlertTriangle size={16} />{financeError}</p>}
+              {(financeError || domoBlocker || projexioBlockerMessage) && <p className="devis-wizard-alert"><AlertTriangle size={16} />{financeError || domoBlocker || projexioBlockerMessage}</p>}
             </div>
           )}
 
@@ -969,7 +1044,7 @@ export default function DevisWizard({
               <WizardSection n="4" title="Financement" actions={<button type="button" className="wizard-link" onClick={() => goTo(3)}><Pencil size={14} />Modifier</button>}>
                 <p>{FINANCE_MODES.find(mode => mode.id === state.financeMode)?.label}</p>
                 {(acompte > 0 || state.conditionsReglement) && <p>Acompte {euro(acompte)}{state.conditionsReglement ? ` · ${state.conditionsReglement}` : ""}</p>}
-                {state.financeMode === "credit" && <p>{state.financier} · financé {euro(state.financedAmount)} · apport {euro(state.personalContribution)} · {state.financeStatus}</p>}
+                {state.financeMode === "credit" && <p>{state.financier} · financé {euro(state.financedAmount || totals.totalTTC)} · apport {euro(state.personalContribution)}{state.monthlyPayment !== "" && state.monthlyPayment != null ? ` · ${state.financeMonths} mois · ${euro(state.monthlyPayment)}` : ""} · {state.financeStatus}</p>}
               </WizardSection>
               {commercialDocs.length > 0 && (
                 <WizardSection n="5" title="Documentation commerciale" hint="Cochez le PDF commercial à coller après le devis, dans l’ordre des articles.">

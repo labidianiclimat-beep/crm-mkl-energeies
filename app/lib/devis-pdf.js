@@ -636,10 +636,10 @@ export async function buildDevisPdfBlob(doc, {
     drawAcceptance(ctx, representativeName, doc.representativeSignature);
   }
 
-  const totalPages = ctx.pdf.getNumberOfPages();
-  for (let page = 1; page <= totalPages; page += 1) {
+  const quotePageCount = ctx.pdf.getNumberOfPages();
+  for (let page = 1; page <= quotePageCount; page += 1) {
     ctx.pdf.setPage(page);
-    drawFooter(ctx, page, totalPages);
+    drawFooter(ctx, page, quotePageCount);
   }
 
   for (const image of Array.isArray(annexImages) ? annexImages : []) {
@@ -657,5 +657,7 @@ export async function buildDevisPdfBlob(doc, {
     }
   }
 
-  return pdf.output("blob");
+  const blob = pdf.output("blob");
+  blob.quotePageCount = quotePageCount;
+  return blob;
 }

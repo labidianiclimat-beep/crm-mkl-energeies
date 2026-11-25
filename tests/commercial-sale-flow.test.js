@@ -9,7 +9,7 @@ import { proofAccess, runSaleRequest, saleView } from "../app/lib/commercial-sal
 import { loadRecordedDevis, recordedDevisFromRow } from "../app/lib/commercial-sale-record.js";
 import { readSalePdf, saveSalePdf } from "../app/lib/commercial-sale-file.js";
 import { COMMERCIAL_SALE_PRODUCTION_WRITE, commitDevisSignatureInDatabase } from "../app/lib/commercial-sale-production.js";
-import { signatureAccess, signaturePilotIds, signatureProjectTarget } from "../app/lib/commercial-sale-target.js";
+import { signatureAccess, signaturePilotIds, signatureProjectTarget, signatureRemoteAllowed } from "../app/lib/commercial-sale-target.js";
 
 const pdf = Buffer.from("%PDF-1.4\npreuve");
 const pdfBase64 = pdf.toString("base64");
@@ -17,7 +17,12 @@ const otherPdf = Buffer.from("%PDF-1.4\nautre");
 const date = "2026-11-13";
 const commercial = { id: "commercial-1", role: "Commercial", full_name: "Camille Martin" };
 const colleague = { id: "commercial-2", role: "Commercial", full_name: "Autre vendeur" };
-const responsable = { id: "resp-1", role: "Responsable commercial", full_name: "Rita Conseil" };
+const responsable = {
+  id: "resp-1",
+  role: "Responsable commercial",
+  full_name: "Rita Conseil",
+  actions: ["action:validate_signed_quote"],
+};
 const direction = { id: "dir-1", role: "Direction", full_name: "Direction" };
 const secretariat = { id: "sec-1", role: "Secrétariat", full_name: "Secrétariat" };
 
@@ -272,9 +277,27 @@ test("la production et la migration restent fermées", async () => {
     MKL_SIGNATURE_PILOT_COMMERCIAL_ID: commercialId,
     MKL_SIGNATURE_PILOT_MANAGER_ID: managerId,
   };
-  assert.equal(signatureAccess({ ...production, ...pilotEnv }).reads, false);
-  assert.equal(signatureAccess({ ...production, ...pilotEnv }).writes, false);
-  assert.equal(signatureAccess({ ...production, ...pilotEnv }, { productionWrite: true }).writes, true);
+  assert.equal(signatureAccess({ ...production, ...pilotEnv }).reads, true);
+  assert.equal(signatureAccess({ ...production, ...pilotEnv }).writes, true);
+  assert.equal(signatureAccess({ ...production, ...pilotEnv }, { productionWrite: false }).writes, true);
+  assert.equal(signatureRemoteAllowed({ ...production, ...pilotEnv }, { write: true }), true);
+  assert.equal(signatureRemoteAllowed({ ...production, ...pilotEnv }, { write: false }), true);
+  for (const mode of ["off", "lecture", "actif"]) {
+    const closed = { ...production, ...pilotEnv, MKL_SIGNATURE_MODULE: mode };
+    assert.equal(signatureAccess(closed).reads, false, mode);
+    assert.equal(signatureAccess(closed).writes, false, mode);
+    assert.equal(signatureRemoteAllowed(closed, { write: true }), false, mode);
+    assert.equal(signatureRemoteAllowed(closed, { write: false }), false, mode);
+  }
+  assert.equal(signatureAccess({
+    ...production,
+    ...pilotEnv,
+    MKL_SIGNATURE_PILOT_MANAGER_ID: commercialId,
+  }).writes, false);
+  assert.equal(signatureAccess({
+    NEXT_PUBLIC_SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co",
+    ...pilotEnv,
+  }).writes, false);
   assert.equal(signatureAccess({ ...production, MKL_SIGNATURE_MODULE: "pilote" }, { productionWrite: true }).writes, false);
   assert.equal(signatureAccess({ ...recette, MKL_SIGNATURE_MODULE: "pilote" }).reads, false);
   assert.equal(signatureAccess({ ...recette, ...pilotEnv }).writes, true);
@@ -325,7 +348,8 @@ test("la production et la migration restent fermées", async () => {
   assert.match(sql, /security definer/);
   assert.match(sql, /grant execute on function public\.commit_devis_signature/);
   assert.match(sql, /sale_can_confirm/);
-  assert.match(panel, /Déposer un devis signé/);
+  assert.match(panel, /Soumettre à la validation/);
+  assert.doesNotMatch(panel, /Superadmin/);
   assert.match(panel, /Confirmer la vente/);
   assert.match(panel, /Confirmer en avenant/);
   assert.doesNotMatch(panel, /totalTtc/);

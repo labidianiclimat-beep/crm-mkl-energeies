@@ -64,7 +64,7 @@ import {
   heatPumpRemovalQuoteLines,
   heatPumpTankRemovalById,
 } from "../lib/heat-pump-removal";
-import { PV_QUOTE_SIZES, bundleMatchesPvSize, bundleUsesMicroInverter, pvQuoteSizeById } from "../lib/pv-quote-sizes";
+import { PV_QUOTE_SIZES, bundleMatchesPvSize, bundleUsesMicroInverter, isStandaloneBatteryGroup, pvQuoteSizeById } from "../lib/pv-quote-sizes";
 import { isRadiatorBundle } from "../lib/radiator-bundle";
 import { isHeatPumpPath } from "../lib/heat-pump-specs";
 import { isClimOutdoorPath } from "../lib/clim-outdoor-specs";
@@ -243,6 +243,10 @@ export default function ArticlePickerWizard({
     return bundlesForPath(bundles, { category, subcategory: pathSubcategory, brand: accessoryKind ? "" : brandName }, { includeInactive });
   }, [bundles, category, pathSubcategory, brandName, accessoryKind, query, isCreate, includeInactive, pickIntent]);
   const pvSize = pvQuoteSizeById(pvSizeId);
+  const batteryGroups = useMemo(
+    () => (bundles || []).filter(bundle => (includeInactive || isBundleActive(bundle)) && isStandaloneBatteryGroup(bundle)),
+    [bundles, includeInactive]
+  );
   const pvGroups = useMemo(() => {
     if (!pvSize) return [];
     const needle = query.trim().toLowerCase();
@@ -1008,6 +1012,30 @@ export default function ArticlePickerWizard({
                   </div>
                 </section>
               ))}
+              {batteryGroups.length > 0 && (
+                <section className="pv-size-section pv-battery-groups">
+                  <b>Batterie</b>
+                  <div className="wizard-material-grid">
+                    {batteryGroups.map(bundle => (
+                      <article key={bundle.id} className="wizard-material-card wizard-bundle-card">
+                        {bundle.name && <div className="quote-bundle-heading"><b>{bundle.name}</b></div>}
+                        <ul className="wizard-bundle-items">
+                          {(bundle.items || []).map((item, index) => (
+                            <li key={`${item.code || item.name}-${index}`}>
+                              <span>{item.name}</span>
+                              <b>{money(priceTtc(item.price, item.tax))}</b>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="wizard-material-foot">
+                          <span className="wizard-status on">Groupe</span>
+                          <button type="button" className="wizard-primary" onClick={() => addBundle(bundle)}>Ajouter le groupe</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
             </div>
           )}
 

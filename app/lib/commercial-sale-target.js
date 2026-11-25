@@ -3,7 +3,7 @@ import { projectRefFromUrl } from "./supabase-environment.js";
 export const PRODUCTION_REF = "rzkwmwtjnwnmmcexwoov";
 export const RECETTE_REF = "xqbjfytrssslnsxxdrou";
 
-/** Reste false. Le passer à true ne suffit pas : la production exige aussi le mode actif ou pilote. */
+/** Reste false. Le pilote ne dépend pas d’elle. Seuls les modes actif et lecture de production en dépendent. */
 export const COMMERCIAL_SALE_PRODUCTION_WRITE = false;
 
 const SIGNATURE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -12,7 +12,7 @@ export function isSignatureUuid(value) {
   return SIGNATURE_UUID.test(String(value || "").trim());
 }
 
-/** local : aucun projet Supabase. production et inconnu n’autorisent aucune écriture. */
+/** local : aucun projet Supabase. Un projet inconnu n’autorise aucune écriture. */
 export function signatureProjectTarget(env = process.env) {
   const ref = projectRefFromUrl(env.NEXT_PUBLIC_SUPABASE_URL);
   if (!ref) return "local";
@@ -48,10 +48,10 @@ export function signaturePilotIds(env = process.env) {
  * off coupe les lectures et les écritures sans effacer les preuves.
  * lecture laisse relire les preuves déjà enregistrées.
  * actif conserve le fonctionnement par rôle. pilote n’ouvre que deux
- * identifiants, et seulement s’ils sont valides et distincts.
- * La production s’ouvre seulement si COMMERCIAL_SALE_PRODUCTION_WRITE vaut
- * true et l’appel passe productionWrite. L’une sans l’autre laisse la
- * production fermée, y compris en mode pilote.
+ * identifiants serveur, et seulement s’ils sont valides et distincts.
+ * En production, ce pilote s’ouvre même si COMMERCIAL_SALE_PRODUCTION_WRITE
+ * reste false. Les modes actif et lecture y restent fermés tant que la
+ * constante n’est pas true.
  */
 export function signatureAccess(env = process.env, options = {}) {
   const target = signatureProjectTarget(env);
@@ -62,8 +62,9 @@ export function signatureAccess(env = process.env, options = {}) {
   }
   if (mode === "pilote") {
     if (!signaturePilotIds(env).valid) return { target, mode: "pilote", reads: false, writes: false };
-    if (target === "local" || target === "recette") return { target, mode: "pilote", reads: true, writes: true };
-    if (target === "production" && productionWrite) return { target, mode: "pilote", reads: true, writes: true };
+    if (target === "local" || target === "recette" || target === "production") {
+      return { target, mode: "pilote", reads: true, writes: true };
+    }
     return { target, mode: "pilote", reads: false, writes: false };
   }
   if (target === "local") {
@@ -83,7 +84,9 @@ export function signatureAccess(env = process.env, options = {}) {
 
 export function signatureRemoteAllowed(env = process.env, { write = false } = {}) {
   const access = signatureAccess(env, { productionWrite: COMMERCIAL_SALE_PRODUCTION_WRITE === true });
-  if (access.target === "recette" && (write ? access.writes : access.reads)) return true;
-  if (access.target === "production" && COMMERCIAL_SALE_PRODUCTION_WRITE === true && (write ? access.writes : access.reads)) return true;
+  const allowed = write ? access.writes : access.reads;
+  if (access.target === "production" && access.mode === "pilote" && allowed) return true;
+  if (access.target === "recette" && allowed) return true;
+  if (access.target === "production" && COMMERCIAL_SALE_PRODUCTION_WRITE === true && allowed) return true;
   return false;
 }

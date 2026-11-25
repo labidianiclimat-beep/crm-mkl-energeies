@@ -221,6 +221,11 @@ const LEGACY_SOURCE_MAP = {
   "prospection": { category: "prospection", subtype: "" },
   "appel entrant": { category: "entrant", subtype: "appel_entrant" },
   "site internet": { category: "site_web", subtype: "", ambiguous: true },
+  // Saisie manuelle : un contact nommé, distinct des prospects publicitaires
+  // classés automatiquement (Prospect GG Ads, Prospect Face).
+  "contact google": { category: "entrant", subtype: "" },
+  "contact meta": { category: "entrant", subtype: "" },
+  "contact effy": { category: "entrant", subtype: "" },
   "recommandation": { category: "entrant", subtype: "recommandation" },
   "partenaire": { category: "entrant", subtype: "partenaire" },
   "salon": { category: "prospection", subtype: "foire_salon" },

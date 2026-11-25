@@ -7,6 +7,7 @@ import { COMMERCIAL_SALE_PRODUCTION_WRITE, commitDevisSignatureInDatabase } from
 import { sameSignatureOrganization, signatureActorIdentity, signaturePermissions } from "../../../../lib/commercial-sale-pilot";
 import { readRemoteSaleBook, readRemoteSalePdf } from "../../../../lib/commercial-sale-remote";
 import { signatureAccess, signaturePilotIds } from "../../../../lib/commercial-sale-target";
+import { storedDevisPdfBytes } from "../../../../lib/devis-signature-document";
 
 export const runtime = "nodejs";
 
@@ -143,8 +144,21 @@ export async function POST(request, { params }) {
     const auth = await requireApiSession(request);
     if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
     const actor = signatureActorIdentity(auth);
-    const body = await request.json().catch(() => ({}));
+    const received = await request.json().catch(() => ({}));
     const { id } = await params;
+    let body = received;
+    if (received.action === "demande" && received.useStoredDevis === true && !pdfFromBody(received)) {
+      try {
+        const generated = await storedDevisPdfBytes(id);
+        body = { ...received, pdfBase64: generated.toString("base64"), kind: "devis_signe" };
+      } catch (error) {
+        console.error("Commercial sale stored devis", error?.message || error);
+        return Response.json(
+          { error: "Le devis enregistré n’a pas pu être préparé pour la validation.", productionWrite: false },
+          { status: 503 }
+        );
+      }
+    }
     const loaded = await recordedOrResponse(id, auth.accessToken);
     if (loaded.response) return loaded.response;
     if (!sameSignatureOrganization(actor.profile, loaded.recorded)) return accountClosed();

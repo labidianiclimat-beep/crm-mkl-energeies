@@ -42,7 +42,7 @@ export async function GET(request) {
       permissions: dbPermissions?.length
         ? dbPermissions
         : [
-            ...ACCESS_MODULES.map(module => ({ code: `module:${module}`, label: module, category: "module" })),
+            ...ACCESS_MODULES.map(module => ({ code: `module:${module}`, label: module === "Agenda commercial" ? "Agenda" : module, category: "module" })),
             ...ACTION_PERMISSIONS.map(item => ({ ...item, category: "action" })),
           ],
       myPermissions: listProfilePermissions(auth.profile),

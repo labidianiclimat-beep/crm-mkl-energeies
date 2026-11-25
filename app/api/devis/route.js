@@ -189,6 +189,9 @@ export async function POST(request) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
     }
     header.numero_devis = await allocateNumber(auth.profile.organization_id, header.kind);
+    if (header.extra && typeof header.extra === "object" && header.extra.financeMode === "credit") {
+      header.extra = { ...header.extra, financeFileNumber: header.numero_devis };
+    }
     header.created_at = new Date().toISOString();
 
     const createdRows = await serviceRequest("/rest/v1/devis", {

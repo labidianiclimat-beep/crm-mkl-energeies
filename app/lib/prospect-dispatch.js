@@ -239,6 +239,7 @@ export function dispatchOutcome(prospect, appointment) {
   if (isConvertedProspect(prospect) || prospect?.stage === "Gagné") return "Transformé en client";
   const extra = extraOf(prospect);
   if (DISPATCH_OUTCOMES.includes(extra.dispatchOutcome)) return extra.dispatchOutcome;
+  if (prospect?.stage === "NRP") return "NRP";
   if (prospect?.stage === "Perdu") return "Non intéressé";
   if (prospect?.stage === "À contacter" && !appointment) return "À contacter";
   if (APPOINTMENT_OUTCOME[appointment?.status]) return APPOINTMENT_OUTCOME[appointment.status];
