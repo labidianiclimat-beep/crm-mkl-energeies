@@ -13,16 +13,20 @@ Installez sur le nouvel ordinateur :
 
 ## 2. Préparer la connexion Supabase
 
-Dans le dossier du CRM, créez un fichier nommé `.env.local` contenant :
+Dans le dossier du CRM, créez un fichier nommé `.env.local`.
+Le modèle est `.env.example`, à la racine du dossier. Renseignez au minimum :
 
 ```text
-NEXT_PUBLIC_SUPABASE_URL=https://rzkwmwtjnwnmmcexwoov.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_egPsJQ5koBZHRPhT4dPhFw_Ffiz67B3
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 ```
 
-La clé ci-dessus est la clé publique prévue pour l'application. Ne copiez
-jamais dans ce dossier le mot de passe PostgreSQL, une clé `service_role` ou
-une clé secrète Supabase.
+Les valeurs se lisent dans Supabase, Project Settings, API. Ne les inscrivez
+pas dans ce document. Ne copiez jamais dans ce dossier le mot de passe
+PostgreSQL, une clé `service_role` ou une clé secrète Supabase.
+
+Sans ces deux variables, le CRM ne contacte pas Supabase : il signale une
+configuration incomplète.
 
 ## 3. Démarrer le CRM
 

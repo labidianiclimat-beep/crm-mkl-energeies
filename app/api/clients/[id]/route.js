@@ -3,20 +3,49 @@ import { ACTIVITY_ACTIONS, clientDiff, clientLabel } from "../../../lib/activity
 import {
   canAssignClientCommercial,
   canViewAllClients,
+  blockedNameAddressConflict,
+  blockedNameAddressRows,
+  clientDuplicateConflict,
   clientToUi,
   findClientDuplicates,
   formToClientRecord,
+  splitScopedDuplicates,
   validateClientPayload,
 } from "../../../lib/clients";
 import { actorFromAuth, logActivity } from "../../../lib/log-activity";
 import { loadTeamMemberIds } from "../../../lib/team-scope";
 import { canAccessScopedRow } from "../../../lib/scoping";
+import { canEditExistingClient } from "../../../lib/permissions";
+import { normalizeRoleLabel } from "../../../lib/roles";
+import { listAllRows } from "../../../lib/supabase-list";
 import { serviceRequest, serviceRoleConfigured } from "../../../lib/supabase-server";
 
 export const runtime = "nodejs";
 
 const SELECT =
-  "id,organization_id,type_client,civilite,nom,prenom,raison_sociale,adresse,complement_adresse,code_postal,ville,telephone,telephone_secondaire,email,origine_lead,statut,commercial_id,notes,project_type,install,consent,created_at,updated_at,created_by";
+  "id,organization_id,type_client,civilite,nom,prenom,raison_sociale,adresse,complement_adresse,code_postal,ville,telephone,telephone_secondaire,email,origine_lead,statut,commercial_id,notes,project_type,install,consent,created_at,updated_at,created_by,client_number,origin_prospect_number";
+
+async function requestClients(path) {
+  try {
+    return await serviceRequest(path);
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (/origin_prospect_number/i.test(message)) return requestClients(path.replace(",origin_prospect_number", ""));
+    if (!/client_number/i.test(message)) throw error;
+    return serviceRequest(path.replace(",client_number", ""));
+  }
+}
+
+async function listClientRows(path) {
+  try {
+    return await listAllRows(path);
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (/origin_prospect_number/i.test(message)) return listClientRows(path.replace(",origin_prospect_number", ""));
+    if (!/client_number/i.test(message)) throw error;
+    return listAllRows(path.replace(",client_number", ""));
+  }
+}
 
 async function canAccessRow(profile, userId, row) {
   if (!row) return false;
@@ -25,7 +54,7 @@ async function canAccessRow(profile, userId, row) {
 }
 
 async function loadOne(id) {
-  const rows = await serviceRequest(
+  const rows = await requestClients(
     `/rest/v1/clients?select=${SELECT}&id=eq.${encodeURIComponent(id)}&limit=1`
   );
   return rows?.[0] || null;
@@ -75,6 +104,9 @@ export async function PATCH(request, { params }) {
     if (!existing || !(await canAccessRow(auth.profile, auth.user.id, existing))) {
       return Response.json({ error: "Client introuvable ou accès refusé." }, { status: 404 });
     }
+    if (!canEditExistingClient(auth.profile)) {
+      return Response.json({ error: "Seuls l’Admin VIP et le Superadmin peuvent modifier une fiche enregistrée." }, { status: 403 });
+    }
 
     const body = await request.json();
     const forceDuplicate = Boolean(body.forceDuplicate);
@@ -90,10 +122,24 @@ export async function PATCH(request, { params }) {
     delete record.created_at;
     record.organization_id = existing.organization_id;
 
+    const stockKeys = await serviceRequest(
+      `/rest/v1/entretien_client_keys?client_id=eq.${encodeURIComponent(id)}&select=import_key&limit=1`
+    ).catch(() => []);
+    if (stockKeys?.length) {
+      const identity = ["nom", "prenom", "raison_sociale", "adresse", "code_postal", "ville"];
+      const changed = identity.some(field => String(record[field] || "") !== String(existing[field] || ""));
+      if (changed) {
+        return Response.json({
+          error: "Cette fiche appartient à la base entretien figée. Nom et adresse ne se modifient plus. Téléphone, email et notes restent possibles.",
+          locked: true,
+        }, { status: 409 });
+      }
+    }
+
+    const teamIds = await loadTeamMemberIds(auth.profile, auth.user.id);
     if (canViewAllClients(auth.profile)) {
       // attribution libre
     } else if (canAssignClientCommercial(auth.profile)) {
-      const teamIds = await loadTeamMemberIds(auth.profile, auth.user.id);
       const allowed = new Set((teamIds || [auth.user.id]).map(String));
       if (!allowed.has(String(record.commercial_id || ""))) {
         record.commercial_id = existing.commercial_id || auth.user.id;
@@ -107,19 +153,18 @@ export async function PATCH(request, { params }) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
     }
 
-    const orgClients = await serviceRequest(
+    const orgClients = await listClientRows(
       `/rest/v1/clients?select=${SELECT}&organization_id=eq.${encodeURIComponent(auth.profile.organization_id)}`
     );
     const duplicates = findClientDuplicates(orgClients || [], record, { excludeId: id });
-    if (duplicates.length && !forceDuplicate) {
-      return Response.json({
-        error: "Doublon potentiel détecté.",
-        duplicates: duplicates.map(row => ({
-          id: row.id,
-          name: `${row.prenom || ""} ${row.nom || ""}`.trim() || row.raison_sociale || row.email,
-          reasons: row._duplicateReasons,
-        })),
-      }, { status: 409 });
+    const blocked = blockedNameAddressRows(duplicates);
+    if (blocked.length) {
+      const scoped = splitScopedDuplicates(blocked, auth.profile, auth.user.id, teamIds || []);
+      return Response.json(blockedNameAddressConflict(scoped.visible), { status: 409 });
+    }
+    const { visible, hidden } = splitScopedDuplicates(duplicates, auth.profile, auth.user.id, teamIds || []);
+    if ((visible.length || hidden.length) && !forceDuplicate) {
+      return Response.json(clientDuplicateConflict(visible), { status: 409 });
     }
 
     const rows = await serviceRequest(`/rest/v1/clients?id=eq.${encodeURIComponent(id)}`, {
@@ -155,7 +200,7 @@ export async function DELETE(request, { params }) {
     if (!serviceRoleConfigured()) {
       return Response.json({ error: "SUPABASE_SERVICE_ROLE_KEY manquant." }, { status: 503 });
     }
-    if (!canViewAllClients(auth.profile) || !["Admin VIP", "Admin second"].includes(auth.profile.role)) {
+    if (!canViewAllClients(auth.profile) || !["Admin VIP", "Superadmin"].includes(normalizeRoleLabel(auth.profile.role))) {
       return Response.json({ error: "Suppression réservée aux administrateurs." }, { status: 403 });
     }
 
@@ -163,6 +208,16 @@ export async function DELETE(request, { params }) {
     const existing = await loadOne(id);
     if (!existing || existing.organization_id !== auth.profile.organization_id) {
       return Response.json({ error: "Client introuvable." }, { status: 404 });
+    }
+
+    const stockKeys = await serviceRequest(
+      `/rest/v1/entretien_client_keys?client_id=eq.${encodeURIComponent(id)}&select=import_key&limit=1`
+    ).catch(() => []);
+    if (stockKeys?.length) {
+      return Response.json({
+        error: "Impossible de supprimer une fiche de la base entretien figée.",
+        locked: true,
+      }, { status: 409 });
     }
 
     await serviceRequest(`/rest/v1/clients?id=eq.${encodeURIComponent(id)}`, {

@@ -1,15 +1,15 @@
 import { requireApiSession } from "../../lib/api-auth";
-import { isAdminRole } from "../../lib/permissions";
+import { isAdminVip } from "../../lib/permissions";
 import { serviceRequest, serviceRoleConfigured } from "../../lib/supabase-server";
 
 export const runtime = "nodejs";
 
 export async function GET(request) {
   try {
-    const auth = await requireApiSession(request, { module: "Utilisateurs" });
+    const auth = await requireApiSession(request);
     if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-    if (!isAdminRole(auth.profile.role) && auth.profile.role !== "Direction") {
-      return Response.json({ error: "Journal réservé à la direction / admin." }, { status: 403 });
+    if (!isAdminVip(auth.profile.role)) {
+      return Response.json({ error: "Journal réservé à l’Admin VIP." }, { status: 403 });
     }
     if (!serviceRoleConfigured()) {
       return Response.json({ error: "SUPABASE_SERVICE_ROLE_KEY manquant." }, { status: 503 });

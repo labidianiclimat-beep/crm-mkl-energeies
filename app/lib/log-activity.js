@@ -18,9 +18,12 @@ export async function logActivity(input) {
 }
 
 export function actorFromAuth(auth) {
+  const realId = auth?.realUserId || auth?.profile?.realUserId || null;
+  const previewName = auth?.profile?.previewUserName;
+  const ownName = auth?.profile?.realUserName || auth?.profile?.full_name || auth?.profile?.email || null;
   return {
     organizationId: auth?.profile?.organization_id,
-    userId: auth?.user?.id || auth?.profile?.id || null,
-    userName: auth?.profile?.full_name || auth?.profile?.email || null,
+    userId: realId || auth?.user?.id || auth?.profile?.id || null,
+    userName: previewName ? `${ownName} (vue ${previewName})` : ownName,
   };
 }

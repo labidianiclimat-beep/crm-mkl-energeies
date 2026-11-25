@@ -1,7 +1,19 @@
 "use client";
 
 import {useEffect,useRef,useState} from "react";
-import {ArrowLeft,CheckCircle2,Eraser,Printer,Save,Signature} from "lucide-react";
+import {ArrowLeft,CheckCircle2,Download,Eraser,Printer,Save,Signature} from "lucide-react";
+import DocumentClosing from "../components/document-closing";
+import { ExistingClientGate } from "../components/recipient-connect";
+import DocumentParties, { frozenRecipient } from "../components/document-parties";
+import PrevisitPhotosPanel from "../components/previsit-photos-panel";
+import { companyDisplayName } from "../lib/company";
+import { EXISTING_CLIENT_MESSAGE, findExistingClient, recipientLink } from "../lib/existing-client";
+import { personSearchFields } from "../lib/directory-search";
+import { openCurrentFormPreview } from "../lib/document-preview";
+import { omitEmptyPrevisitFields } from "../lib/previsit-report-fields";
+import { authFetch } from "../lib/supabase-rest";
+import { useCompany } from "../lib/use-company";
+import {loadSharedRecords,saveSharedRecords} from "../lib/use-record-table";
 import "./previsite.css";
 
 const materialSections={
@@ -31,26 +43,246 @@ function SignaturePad({name,title}) {
   return <div className="signature-pad"><div><Signature size={17}/><b>{title}</b><button type="button" onClick={clear}><Eraser size={14}/>Effacer</button></div><canvas ref={canvas} data-name={name} onMouseDown={start} onMouseMove={move} onMouseUp={stop} onMouseLeave={stop} onTouchStart={start} onTouchMove={move} onTouchEnd={stop}/><small>Signer avec le doigt ou le stylet</small></div>;
 }
 
-export default function PrevisitForm() {
-  const [saved,setSaved]=useState(false);
-  const [recordId,setRecordId]=useState(null);
-  useEffect(()=>{const query=new URLSearchParams(location.search);const id=query.get("id");setRecordId(id);let data={};if(id){try{const records=JSON.parse(localStorage.getItem("mkl-technical-visits")||"[]");const record=records.find(item=>String(item.id)===String(id));if(record)data={...record,...record.formData};}catch{}}else{try{data=JSON.parse(localStorage.getItem("mkl-previsite-draft")||"{}");}catch{}}for(const [key,value] of Object.entries(data)){const fields=document.querySelectorAll(`[name="${key}"]`);fields.forEach(field=>{if(field.type==="radio")field.checked=field.value===value;else if(field.type==="checkbox")field.checked=Boolean(value);else field.value=value??"";});}for(const [key,value] of query){const field=document.querySelector(`[name="${key}"]`);if(field&&key!=="id"&&key!=="new")field.value=value;}},[]);
-  function saveDraft(event) {
-    const form=event.currentTarget.closest(".previsit-app").querySelector("form");const data=Object.fromEntries(new FormData(form));localStorage.setItem("mkl-previsite-draft",JSON.stringify(data));
-    let records=[];try{records=JSON.parse(localStorage.getItem("mkl-technical-visits")||"[]");}catch{}
-    let id=recordId;
-    if(id) records=records.map(record=>String(record.id)===String(id)?{...record,client:data.client||record.client,date:data.date||record.date,technician:data.technician||record.technician,quoteNumber:data.quoteNumber||record.quoteNumber,formData:data,status:"Prévisite complétée",updated:new Date().toISOString()}:record);
-    else {id=Date.now();records=[{id,client:data.client||"Client à renseigner",date:data.date||"",technician:data.technician||"Responsable technique",quoteNumber:data.quoteNumber||"",source:"Création sans devis",created:new Date().toISOString(),updated:new Date().toISOString(),status:"Prévisite complétée",formData:data},...records];setRecordId(id);history.replaceState({},"",`/previsite?id=${id}`);}
-    localStorage.setItem("mkl-technical-visits",JSON.stringify(records));setSaved(true);setTimeout(()=>setSaved(false),2200);
+function fillNamedFields(data) {
+  for (const [key, value] of Object.entries(data || {})) {
+    document.querySelectorAll(`[name="${key}"]`).forEach(field => {
+      if (field.type === "radio") field.checked = field.value === value;
+      else if (field.type === "checkbox") field.checked = Boolean(value);
+      else field.value = value ?? "";
+    });
   }
-  return <main className="previsit-app">
-    <header className="form-toolbar"><button onClick={()=>location.href="/"}><ArrowLeft/>Retour CRM</button><div><Save size={18}/><span><b>Rapport de prévisite</b><small>Formulaire MKL Énergies</small></span></div><div><button onClick={saveDraft}><Save/>Enregistrer</button><button className="print" onClick={()=>window.print()}><Printer/>Imprimer / PDF</button></div></header>
-    {saved&&<div className="save-toast"><CheckCircle2/>Brouillon enregistré sur cette tablette</div>}
-    <form>
+}
+
+async function loadClients() {
+  try {
+    const response = await authFetch("/api/clients");
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && Array.isArray(data.clients)) return data.clients;
+  } catch {}
+  return [];
+}
+
+function PrevisitParties({ company, clients, clientId, presetClient }) {
+  const selected = findExistingClient(clients, clientId) || (presetClient?.id ? presetClient : null);
+  const party = frozenRecipient(selected);
+  return <>
+    <input type="hidden" name="client" value={party.clientName} />
+    <input type="hidden" name="address" value={party.clientAddress} />
+    <input type="hidden" name="phone" value={party.clientPhone} />
+    <input type="hidden" name="email" value={party.clientEmail} />
+    <DocumentParties company={company} clientTitle="Client / destinataire" {...party} />
+  </>;
+}
+
+function agendaPreset(fields) {
+  const source = fields || {};
+  const next = {};
+  if (source.date) next.date = source.date;
+  if (source.technician) next.technician = source.technician;
+  return next;
+}
+
+export default function PrevisitForm({
+  embedded = false,
+  presetClient = null,
+  presetId = "",
+  presetFields = null,
+  onClose,
+  onSaved,
+} = {}) {
+  const [saved,setSaved]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [saveMessage,setSaveMessage]=useState("");
+  const [recordId,setRecordId]=useState(null);
+  const [clients,setClients]=useState([]);
+  const opening = recipientLink(presetClient);
+  const [clientId,setClientId]=useState(opening.clientId);
+  const [prospectId,setProspectId]=useState(opening.prospectId);
+  const [party,setParty]=useState(presetClient?.directoryKind==="prospect"?presetClient:null);
+  const pendingDraft=useRef(null);
+  const draftFilled=useRef(false);
+  const {company}=useCompany();
+  useEffect(()=>{
+    const query=embedded ? new URLSearchParams() : new URLSearchParams(location.search);
+    const id=embedded ? (presetId || "") : query.get("id");
+    setRecordId(id || null);
+    (async()=>{
+      const directory=await loadClients();
+      setClients(directory);
+      let data={};
+      let linked="";
+      if(id){
+        const records=await loadSharedRecords("mkl-technical-visits");
+        const record=records.find(item=>String(item.id)===String(id));
+        if(record) {
+          data={...record,...record.formData};
+          linked=record.clientId||record.formData?.clientId||"";
+          if(!linked && (record.prospectId||record.formData?.prospectId)) setProspectId(String(record.prospectId||record.formData?.prospectId));
+        } else {
+          try { data=JSON.parse(localStorage.getItem("mkl-previsite-draft")||"{}"); } catch {}
+          linked=data.clientId||"";
+        }
+      } else {
+        try { data=JSON.parse(localStorage.getItem("mkl-previsite-draft")||"{}"); } catch {}
+        linked=data.clientId||"";
+      }
+      for(const [key,value] of query){
+        if(key==="id"||key==="new") continue;
+        if(key==="clientId") { linked=value; continue; }
+        data[key]=value;
+      }
+      if(!embedded && query.get("new")==="1"&&!query.get("clientId")) linked="";
+      if(embedded && presetClient?.directoryKind==="prospect") linked="";
+      else if(embedded && presetClient?.id) linked=String(presetClient.id);
+      pendingDraft.current=data;
+      setClientId(linked?String(linked):"");
+    })();
+  },[]);
+  useEffect(()=>{
+    if(draftFilled.current) return;
+    if(!pendingDraft.current && !clientId && !prospectId) return;
+    const presetMatch = presetClient?.id && String(presetClient.id) === String(clientId) ? presetClient : null;
+    if (presetId && !pendingDraft.current) return;
+    if (clientId && clients.length === 0 && !presetMatch) return;
+    const named = { ...(pendingDraft.current || {}), ...agendaPreset(presetFields) };
+    const client=findExistingClient(clients, clientId);
+    if(client) {
+      draftFilled.current=true;
+      fillNamedFields(named);
+      applyClientFields(client);
+      return;
+    }
+    if(presetMatch) {
+      draftFilled.current=true;
+      fillNamedFields(named);
+      applyClientFields(presetMatch);
+      return;
+    }
+    if(prospectId && (party||presetClient) && !draftFilled.current) {
+      draftFilled.current=true;
+      fillNamedFields(named);
+      applyClientFields(party||presetClient);
+    }
+  },[clientId,clients,prospectId,presetClient,presetFields,presetId]);
+  useEffect(() => {
+    const onBeforePrint = () => omitEmptyPrevisitFields(document.querySelector(".previsit-app"), { mark: true });
+    const onAfterPrint = () => {
+      document.querySelectorAll(".previsit-omit").forEach(node => node.classList.remove("previsit-omit"));
+    };
+    window.addEventListener("beforeprint", onBeforePrint);
+    window.addEventListener("afterprint", onAfterPrint);
+    return () => {
+      window.removeEventListener("beforeprint", onBeforePrint);
+      window.removeEventListener("afterprint", onAfterPrint);
+      onAfterPrint();
+    };
+  }, []);
+  function applyClientFields(item) {
+    if(!item) return;
+    const fields=personSearchFields(item);
+    fillNamedFields({
+      client:item.name||`${fields.lastName} ${fields.firstName}`.trim(),
+      address:fields.address,
+      phone:fields.phone,
+      email:fields.email,
+    });
+  }
+  function applyClient(item) {
+    const link=recipientLink(item);
+    setClientId(link.clientId);
+    setProspectId(link.prospectId);
+    setParty(item?.directoryKind==="prospect"?item:null);
+    applyClientFields(item);
+  }
+  function hasParty() {
+    if (findExistingClient(clients, clientId) || prospectId) return true;
+    return Boolean(presetClient?.id && String(presetClient.id) === String(clientId));
+  }
+  function readForm() {
+    const form=document.querySelector(".previsit-app form");
+    const data={};
+    if(form) {
+      for (const [key, value] of new FormData(form).entries()) {
+        if (typeof value === "string") data[key]=value;
+      }
+    }
+    if(clientId) data.clientId=clientId;
+    if(prospectId) data.prospectId=prospectId;
+    return data;
+  }
+  async function saveDraft() {
+    if(saving) return "";
+    if(!hasParty()) {
+      setSaveMessage(EXISTING_CLIENT_MESSAGE);
+      setSaved(true);
+      setTimeout(()=>setSaved(false), 4000);
+      return "";
+    }
+    setSaving(true);
+    setSaved(false);
+    setSaveMessage("");
+    try {
+      const data=readForm();
+      try { localStorage.setItem("mkl-previsite-draft",JSON.stringify(data)); } catch {}
+      let records=await loadSharedRecords("mkl-technical-visits");
+      if(!Array.isArray(records)) records=[];
+      let id=recordId;
+      const next={
+        client:data.client||"Client à renseigner",
+        clientId:data.clientId||"",
+        prospectId:data.prospectId||prospectId||"",
+        date:data.date||"",
+        technician:data.technician||"Responsable technique",
+        quoteNumber:data.quoteNumber||"",
+        formData:data,
+        status:"Prévisite complétée",
+        updated:new Date().toISOString(),
+      };
+      if(id && records.some(record=>String(record.id)===String(id))) {
+        records=records.map(record=>String(record.id)===String(id)?{...record,...next}:record);
+      } else {
+        id=id||Date.now();
+        records=[{id,source:"Création sans devis",created:new Date().toISOString(),...next},...records];
+        setRecordId(id);
+        if(!embedded) history.replaceState({},"",`/previsite?id=${id}`);
+      }
+      await saveSharedRecords("mkl-technical-visits",records,{ deletedIds: [] });
+      onSaved?.(records.find(record=>String(record.id)===String(id)));
+      setSaveMessage("");
+      setSaved(true);
+      setTimeout(()=>setSaved(false),2200);
+      return String(id);
+    } catch (error) {
+      setSaveMessage(String(error?.message||"Enregistrement impossible. Réessayez."));
+      setSaved(true);
+      return "";
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function ensureVisit() {
+    if(recordId) {
+      await saveDraft();
+      return String(recordId);
+    }
+    return saveDraft();
+  }
+  return <main className={`previsit-app${embedded?" is-embedded":""}`}>
+    <header className="form-toolbar"><button type="button" onClick={()=>{ if(embedded) onClose?.(); else location.href="/"; }}><ArrowLeft/>{embedded?"Fermer":"Retour CRM"}</button><div><Save size={18}/><span><b>Rapport de prévisite</b><small>Formulaire {companyDisplayName(company)}</small></span></div><div><button type="button" disabled={saving} onClick={()=>saveDraft()}><Save/>{saving?"Enregistrement…":"Enregistrer"}</button><button type="button" onClick={()=>{if(!hasParty()){setSaveMessage(EXISTING_CLIENT_MESSAGE);setSaved(true);return;}openCurrentFormPreview({title:"Rapport de prévisite",rootSelector:".previsit-app",omitEmpty:true}).catch(error=>setSaveMessage(String(error?.message||"Téléchargement PDF impossible")))}}><Download/>Télécharger</button><button type="button" className="print" onClick={()=>{if(!hasParty()){setSaveMessage(EXISTING_CLIENT_MESSAGE);setSaved(true);return;} if(embedded){openCurrentFormPreview({title:"Rapport de prévisite",rootSelector:".previsit-app",omitEmpty:true}).catch(error=>setSaveMessage(String(error?.message||"Impression impossible")));return;} window.print();}}><Printer/>Imprimer</button></div></header>
+    {(saving||saved)&&(
+      <div className={`save-toast${saveMessage?" is-error":""}`}>
+        {saveMessage?saveMessage:<><CheckCircle2/>{saving?"Enregistrement…":"Prévisite enregistrée"}</>}
+      </div>
+    )}
+    {embedded && presetId && !clientId && !prospectId ? <p className="document-window-empty">Chargement de la prévisite…</p> : !hasParty() ? (
+      <ExistingClientGate clients={clients} title="Rapport de prévisite" allowCreate={false} allowProspect onSelect={applyClient} />
+    ) : (
+    <form onSubmit={event=>event.preventDefault()}>
       <section className="paper cover">
-        <div className="document-head"><img src="/mkl-energies.png" alt="MKL Énergies"/><div><span>RAPPORT DE PRÉVISITE</span><h1>Fiche d’installation</h1><p>Pompe à chaleur • Climatisation • Eau chaude sanitaire</p></div></div>
+        <div className="document-head"><img src="/mkl-energies.png" alt={companyDisplayName(company)}/><div><span>RAPPORT DE PRÉVISITE</span><h1>Fiche d’installation</h1><p>Pompe à chaleur • Climatisation • Eau chaude sanitaire</p></div></div>
+        <PrevisitParties company={company} clients={clients} clientId={clientId} presetClient={party||presetClient} />
         <h2>Informations du dossier</h2>
-        <div className="field-grid"><Field label="Date de prévisite" name="date" type="date"/><Field label="Technicien / Responsable technique" name="technician"/><Field label="Commercial" name="commercial"/><Field label="Nombre de jours d’installation" name="installationDays" type="number"/><Field label="Nom du client" name="client" wide/><Field label="Devis associé (vide si création libre)" name="quoteNumber"/><Field label="Adresse du chantier" name="address" wide/><Field label="Téléphone" name="phone"/><Field label="Email" name="email" type="email"/><Field label="Financement" name="financing"/><Field label="Comptant / acompte" name="deposit"/></div>
+        <div className="field-grid"><Field label="Date de prévisite" name="date" type="date"/><Field label="Technicien / Responsable technique" name="technician"/><Field label="Commercial" name="commercial"/><Field label="Nombre de jours d’installation" name="installationDays" type="number"/><Field label="Devis associé (vide si création libre)" name="quoteNumber"/><Field label="Financement" name="financing"/><Field label="Comptant / acompte" name="deposit"/></div>
         <h2>Pompe à chaleur</h2>
         <div className="field-grid"><Field label="Marque" name="pacBrand"/><Field label="Unité extérieure" name="outsideUnit"/><Field label="Unité intérieure" name="insideUnit"/><Field label="Puissance PAC" name="pacPower"/><Field label="Surface maison (m²)" name="houseArea" type="number"/><Field label="Nombre de radiateurs" name="radiators" type="number"/><Field label="Circuits plancher" name="floorCircuits" type="number"/><Field label="Nature et diamètre chauffage" name="heatingDiameter" wide/><Field label="Nature et diamètre ECS" name="ecsDiameter" wide/><Field label="Alimentation mono / tri" name="electricPhase"/><Field label="Puissance compteur" name="meterPower"/><Field label="Puissance demandée" name="requestedPower"/></div>
         <div className="choice-grid"><Choice name="wirelessRemote" label="Télécommande sans fil"/><Choice name="twoCircuits" label="Deux circuits"/><Choice name="wifi" label="Carte Wi-Fi"/><Choice name="ecsOption" label="ECS"/></div>
@@ -62,17 +294,37 @@ export default function PrevisitForm() {
         <div className="choice-grid"><Choice name="rinse" label="Vidange et rinçage circuits chauffage"/><Choice name="slab" label="Dalle 100×80 réalisée par le client"/><Choice name="locationsApproved" label="Emplacements validés sur photos"/></div>
         <div className="field-grid"><Field label="Câble tableau principal → sous-tableau PAC (m)" name="powerCableLength" type="number"/><Field label="Liaisons frigorifiques et électriques (m)" name="linkLength" type="number"/><Field label="Commentaires" name="comments" wide><textarea name="comments" rows="4"/></Field></div>
       </section>
+      <PrevisitPhotosPanel
+        visitKey={recordId?String(recordId):""}
+        clientId={clientId}
+        ensureVisit={ensureVisit}
+        companyName={companyDisplayName(company)}
+        getMeta={()=>{
+          const data=readForm();
+          return {
+            number:recordId?`PRE-${String(recordId).slice(-6)}`:"",
+            client:data.client,
+            address:data.address,
+            date:data.date,
+            technician:data.technician,
+          };
+        }}
+      />
       <section className="paper materials">
         <div className="document-head compact"><img src="/mkl-energies.png" alt="MKL Énergies"/><div><span>RAPPORT DE PRÉVISITE</span><h1>Liste du matériel</h1><p>Indiquer la quantité prévue pour chaque article.</p></div></div>
         <div className="materials-columns">{Object.entries(materialSections).map(([section,items])=><section className="material-section" key={section}><h2>{section}</h2>{items.map((item,index)=><label key={`${section}-${item}-${index}`}><span>{item}</span><input type="number" min="0" step="1" name={`qty_${section}_${index}`} placeholder="Qté"/></label>)}</section>)}</div>
       </section>
       <section className="paper signatures-page">
         <div className="document-head compact"><img src="/mkl-energies.png" alt="MKL Énergies"/><div><span>VALIDATION</span><h1>Accord de prévisite</h1><p>Les implantations, travaux et besoins matériels ont été présentés au client.</p></div></div>
-        <div className="field-grid"><Field label="Nom du client signataire" name="signerName"/><Field label="Date de signature" name="signatureDate" type="date"/><Field label="Réserves ou observations" name="signatureComments" wide><textarea name="signatureComments" rows="6"/></Field></div>
-        <label className="consent"><input type="checkbox" required/>Je confirme l’exactitude des informations et valide les emplacements présentés lors de la prévisite.</label>
-        <div className="signature-grid"><SignaturePad name={`${recordId||"new"}-technicianSignature`} title="Signature du technicien"/><SignaturePad name={`${recordId||"new"}-clientSignature`} title="Signature du client"/></div>
-        <p className="legal">Document établi électroniquement par MKL Énergies. La signature manuscrite réalisée sur tablette matérialise l’accord du signataire. Une copie imprimée ou PDF peut être remise au client.</p>
+        <div className="field-grid"><Field label="Nom du client signataire" name="signerName"/><Field label="Réserves ou observations" name="signatureComments" wide><textarea name="signatureComments" rows="6"/></Field></div>
+        <label className="consent"><input type="checkbox" name="clientConfirmed"/>Je confirme l’exactitude des informations et valide les emplacements présentés lors de la prévisite.</label>
+        <DocumentClosing>
+          <SignaturePad name={`${recordId||"new"}-technicianSignature`} title="Signature du technicien"/>
+          <SignaturePad name={`${recordId||"new"}-clientSignature`} title="Signature du client"/>
+        </DocumentClosing>
+        <p className="legal">Document établi électroniquement par {companyDisplayName(company)}. La signature manuscrite réalisée sur tablette matérialise l’accord du signataire. Une copie imprimée ou PDF peut être remise au client.</p>
       </section>
     </form>
+    )}
   </main>;
 }

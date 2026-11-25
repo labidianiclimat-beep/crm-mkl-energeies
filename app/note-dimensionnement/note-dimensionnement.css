@@ -1,0 +1,51 @@
+.sizing-app.previsit-app,
+.document-form-screen .sizing-app.previsit-app.is-embedded{padding-top:118px}
+.sizing-app .form-toolbar,
+.document-form-screen .sizing-app.previsit-app.is-embedded .form-toolbar{height:auto;min-height:64px;flex-wrap:wrap;row-gap:8px;padding-top:8px;padding-bottom:8px}
+.sizing-app .sizing-sheet{padding:10mm 11mm 14mm}
+.sizing-sheet .document-head{grid-template-columns:minmax(0,58mm) minmax(0,1fr);gap:4mm}
+.sizing-sheet .document-head>div,.sizing-sheet .document-head h1{min-width:0;overflow-wrap:break-word}
+.sizing-remit{margin:0 0 4mm;padding:3mm 3.5mm;background:#fff8d8;border-left:4px solid #ffdb62;font-size:11px;color:#233252}
+.sizing-sheet h2{margin:5mm 0 3mm;background:#405fae;color:#fff;font-size:11px;letter-spacing:.4px;text-transform:uppercase;padding:7px 10px}
+.sizing-label,.sizing-or{margin:0 0 8px;font-size:12px;font-weight:700;color:#27427f}
+.sizing-types{display:grid;grid-template-columns:1fr;gap:8px}
+.sizing-types button{display:flex;gap:8px;align-items:flex-start;min-width:0;text-align:left;border:1px solid #d5dce8;border-radius:8px;background:#fff;padding:10px 12px;cursor:pointer;color:#52617d;font:12px/1.35 Arial}
+.sizing-types button span{min-width:0;overflow-wrap:break-word}
+.sizing-types button i{width:14px;height:14px;margin-top:2px;border:1.5px solid currentColor;border-radius:50%;flex:none}
+.sizing-types button.on{background:#405fae;border-color:#405fae;color:#fff;font-weight:700}
+.sizing-types button.on i{background:#ffdb62;border-color:#ffdb62}
+.sizing-types small{display:block;font-weight:600;letter-spacing:.3px}
+.sizing-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
+.sizing-field{display:flex;flex-direction:column;gap:4px;min-width:0;margin:0 0 10px;font-size:11px;font-weight:700;color:#27427f}
+.sizing-field input,.sizing-eq input{display:block;width:100%;min-width:0;max-width:100%;border:1px solid #bfc9dc;border-radius:6px;padding:8px;font:13px Arial;color:#233252;background:#fbfcff;font-weight:400}
+.sizing-eq{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:0 0 10px;padding:10px 12px;border:1px solid #c9d3e4;border-radius:8px;background:#f8f9fc}
+.sizing-eq .sizing-field{margin:0}
+.sizing-eq.on{background:#eef3ff;border-color:#c5d2ea}
+.sizing-eq.off{opacity:.72}
+.sizing-eq p{margin:0;min-width:0;font-size:12px;line-height:1.4;color:#52617d}
+.sizing-eq strong{align-self:flex-end;font-size:18px;line-height:1.2;color:#27427f}
+.sizing-eq .inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;min-width:0}
+.sizing-eq .inputs label{min-width:0}
+.sizing-note{margin:0 0 8px;font-size:11px;line-height:1.45;color:#52617d}
+.sizing-study-gate{margin-top:12px}
+.sizing-miss{margin:0;font-size:12px;font-weight:700;color:#8d2a2a}
+.sizing-article-picks{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+.sizing-article-picks button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;text-align:left;border:1px solid #d5dce8;border-radius:8px;background:#fff;padding:8px 10px;cursor:pointer;color:#233252}
+.sizing-article-picks button b{font-size:13px}
+.sizing-article-picks button small{font-size:11px;color:#52617d}
+.sizing-rule{margin:0 0 8px;font-size:12px;line-height:1.45;color:#233252}
+.sizing-verdict{display:flex;width:fit-content;max-width:100%;margin:0 0 8px;padding:6px 12px;border-radius:99px;font-size:12px;font-weight:800}
+.sizing-verdict.is-ok{background:#e5f6ec;color:#1f7a4d}
+.sizing-verdict.is-bad{background:#fde8e8;color:#8d2a2a}
+.sizing-verdict.is-wait{background:#fff4d6;color:#8a5a00}
+.sizing-flag{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:10px;font-weight:700;color:#52617d;text-transform:uppercase}
+.sizing-choice{display:flex;flex-wrap:wrap;gap:8px}
+.sizing-choice button{border:1px solid #d5dce8;background:#fff;border-radius:8px;padding:8px 14px;font-weight:800;cursor:pointer;color:#52617d}
+.sizing-choice button.on{background:#405fae;border-color:#405fae;color:#fff}
+.sizing-attest{margin-top:6mm;border:1px solid #ffdb62;background:#fffdf4;border-radius:8px;padding:12px 14px}
+.sizing-attest b{display:block;margin-bottom:6px;color:#27427f}
+.sizing-attest p{margin:4px 0 4px 16px;font-size:12px}
+.sizing-app .save-toast.is-error{background:#8d2a2a;max-width:460px}
+@media screen and (max-width:700px){
+  .sizing-sheet .document-head,.sizing-pair,.sizing-eq .inputs{grid-template-columns:1fr}
+}

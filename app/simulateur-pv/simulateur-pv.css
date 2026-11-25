@@ -1,0 +1,17 @@
+.pvsim-banner{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:0 0 3mm;padding:6px 8px;background:#3160b2;color:#fff;border-radius:4px;font-size:9px;letter-spacing:.4px;font-weight:700}
+.pvsim-note{margin:1mm 0 3mm;font-size:8px;color:#52617d}
+.pvsim-grid{width:100%;border-collapse:collapse;font-size:8px;margin:0 0 2mm}
+.pvsim-grid th,.pvsim-grid td{border:1px solid #aeb8bb;text-align:center}
+.pvsim-grid th{background:#f4f7f8;font-size:7px;padding:4px 2px;vertical-align:bottom}
+.pvsim-grid thead th span{display:block}
+.pvsim-slope{display:block;width:15px;height:15px;margin:2px auto 0}
+.pvsim-slope line{stroke:#ffcc00;stroke-width:2.8;stroke-linecap:round}
+.pvsim-grid button{width:100%;border:0;background:transparent;padding:6px 2px;cursor:pointer;font:8px Arial;color:#223044}
+.pvsim-grid td.on{background:#fff4c2}
+.pvsim-grid td.on button{font-weight:700;box-shadow:inset 0 0 0 2px #f5c518;border-radius:99px}
+.pvsim-line{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:end;margin:0 0 3mm}
+.pvsim-line label{display:flex;flex-direction:column;gap:3px;font-size:8px;font-weight:700;color:#52617d}
+.pvsim-line input{border:1px solid #bfc9dc;border-radius:5px;padding:7px 8px;background:#fbfcff;font:10px Arial;color:#233252;min-width:28mm}
+.pvsim-result{display:flex;justify-content:space-between;align-items:center;gap:8px;background:#eef3ff;border:1px solid #c9d3e4;border-radius:8px;padding:8px 10px;margin:2mm 0 4mm}
+.pvsim-result b{color:#27427f;font-size:18px}
+.pvsim-result small{display:block;color:#52617d;font-size:8px}

@@ -1,3 +1,113 @@
-.maintenance-app .measure-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:3mm}.measure-grid label{display:flex;flex-direction:column;gap:4px}.measure-grid label span{font-size:8px;font-weight:700;color:#52617d}.measure-grid input{border:1px solid #bfc9dc;border-radius:5px;padding:8px;background:#fbfcff;font-size:10px}.control-section{border:1px solid #bdc8db;margin-bottom:4mm}.control-section>h2{margin:0!important}.control-head,.control-row{display:grid;grid-template-columns:1fr 18mm 18mm 13mm 42mm;align-items:center;min-height:7mm}.control-head{background:#dfe8fa;font-size:7px;font-weight:700;text-align:center}.control-head span:first-child{text-align:left;padding-left:6px}.control-row{border-top:1px solid #d7deea;font-size:7px}.control-row>span{padding:4px 6px;font-weight:600}.control-row label{display:flex;flex-direction:column;align-items:center;font-size:6px;gap:1px}.control-row input[type=text]{height:100%;min-height:7mm;border:0;border-left:1px solid #d7deea;padding:3px;font-size:7px;width:100%}.maintenance-controls{padding-top:10mm}
-@media(max-width:760px){.maintenance-app .measure-grid{grid-template-columns:1fr 1fr}.control-section{overflow-x:auto}.control-head,.control-row{min-width:680px}.maintenance-controls{padding-left:3mm;padding-right:3mm}}
-@media print{.control-head,.control-row{grid-template-columns:1fr 18mm 18mm 13mm 42mm}.control-row{break-inside:avoid}.control-section{break-inside:avoid}}
+.maintenance-app .measure-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:3mm}.measure-grid label{display:flex;flex-direction:column;gap:4px}.measure-grid label span{font-size:8px;font-weight:700;color:#52617d}.measure-grid input{border:1px solid #bfc9dc;border-radius:5px;padding:8px;background:#fbfcff;font-size:10px}.control-section{border:1px solid #bdc8db;margin-bottom:4mm}.control-section>h2{margin:0}.control-head,.control-row{display:grid;grid-template-columns:1fr 18mm 18mm 13mm 42mm;align-items:center;min-height:7mm}.control-head{background:#dfe8fa;font-size:7px;font-weight:700;text-align:center}.control-head span:first-child{text-align:left;padding-left:6px}.control-row{border-top:1px solid #d7deea;font-size:7px}.control-row>span{padding:4px 6px;font-weight:600}.control-row label{display:flex;flex-direction:column;align-items:center;font-size:6px;gap:1px}.control-row input[type=text]{height:100%;min-height:7mm;border:0;border-left:1px solid #d7deea;padding:3px;font-size:7px;width:100%}.maintenance-controls{padding-top:10mm}
+
+.maintenance-app{background:#f6f4ef;color:#152347;font-family:"DM Sans",sans-serif;padding:88px 16px 48px}
+.maintenance-app .form-toolbar{height:auto;min-height:64px;background:#314d93;color:#fff;box-shadow:none;padding:10px 16px;gap:10px;flex-wrap:wrap}
+.maintenance-app .form-toolbar>div:nth-child(2){display:flex}
+.maintenance-app .form-toolbar b{font:800 16px Manrope;color:#fff}
+.maintenance-app .form-toolbar small{font:600 12px "DM Sans";color:#d5def4}
+.maintenance-app .form-toolbar button{min-height:44px;border-radius:12px;border:1.5px solid transparent;background:#fff;color:#152347;font:800 14px "DM Sans"}
+.maintenance-app .form-toolbar .is-save{background:#ffcc00;color:#152347;border-color:#e8c200}
+.maintenance-app .form-toolbar .print{background:#fff;color:#152347;border-color:#d7deea}
+.maintenance-steps{position:sticky;top:64px;z-index:40;display:flex;gap:8px;width:min(920px,100%);margin:-8px auto 14px;padding:10px 0;background:#f6f4ef}
+.maintenance-steps a{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;min-height:44px;padding:8px;border:1.5px solid #d7deea;border-radius:12px;background:#fff;color:#152347;font:700 14px/1.15 "DM Sans";text-decoration:none;text-align:center}
+.maintenance-steps a:hover,.maintenance-steps a:focus{background:#ffcc00;border-color:#e8c200}
+.maintenance-app .paper{scroll-margin-top:140px}
+.maintenance-app .document-head.compact img{display:none}
+.maintenance-app .document-head.compact{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.maintenance-app .paper{width:min(920px,100%);min-height:0;margin:0 auto 16px;padding:22px;border:1px solid #e3e8f2;border-radius:16px;box-shadow:none}
+.maintenance-app .document-head{display:flex;align-items:center;gap:16px;grid-template-columns:none;border-bottom:4px solid #ffcc00;padding:0 0 16px;margin-bottom:16px}
+.maintenance-app .document-head img{width:120px}
+.maintenance-app .document-head>div{background:transparent;color:#152347;padding:0}
+.maintenance-app .document-head span{color:#405fae;font:800 11px "DM Sans";letter-spacing:.12em}
+.maintenance-app .document-head h1{margin:4px 0;color:#152347;font:800 28px/1.15 Manrope}
+.maintenance-app .document-head p{margin:0;color:#5d6b88;font:600 14px "DM Sans"}
+.maintenance-app .paper>h2,.maintenance-app .control-section>h2{background:transparent;color:#152347;text-align:left;text-transform:none;letter-spacing:0;font:800 18px Manrope;padding:0 0 0 10px;margin:22px 0 10px;border-left:4px solid #ffcc00}
+.maintenance-app .field-grid,.maintenance-app .measure-grid{grid-template-columns:1fr 1fr;gap:12px}
+.maintenance-app .field-grid label.wide{grid-column:1 / -1}
+.maintenance-app .field-grid label>span,.maintenance-app .measure-grid label span{font:800 12px "DM Sans";color:#405fae}
+.maintenance-app .field-grid input,.maintenance-app .field-grid select,.maintenance-app .field-grid textarea,.maintenance-app .measure-grid input{min-height:44px;border:1.5px solid #d7deea;border-radius:12px;padding:10px 12px;background:#fff;font:700 16px "DM Sans";color:#152347}
+.maintenance-app .document-parties{grid-template-columns:1fr 1fr;gap:5mm}
+.maintenance-app .document-party{border-radius:3mm;padding:3.5mm;min-height:26mm}
+.maintenance-app .document-party>span{font:700 9px "DM Sans";letter-spacing:.8px}
+.maintenance-app .document-party>b{font:700 14px "DM Sans"}
+.maintenance-app .document-party p{font:400 10px/1.35 "DM Sans";margin:1.5mm 0}
+.maintenance-app .maintenance-controls{padding-top:22px}
+.maintenance-app .control-section{border:0;margin:0 0 8px;overflow:visible}
+.maintenance-app .control-head{display:none}
+.maintenance-app .control-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;min-width:0;min-height:0;margin:0 0 10px;padding:12px;border:1.5px solid #e3e8f2;border-radius:14px;background:#fff;font-size:15px}
+.maintenance-app .control-row>span{grid-column:1 / -1;padding:0;font:700 15px/1.35 "DM Sans";color:#152347}
+.maintenance-app .control-row label{flex-direction:row;justify-content:center;gap:6px;min-height:44px;padding:0 8px;border:1.5px solid #d7deea;border-radius:12px;background:#f7f9fd;font:800 13px "DM Sans";color:#243655}
+.maintenance-app .control-row label:has(input:checked){background:#ffcc00;border-color:#e8c200;color:#152347}
+.maintenance-app .control-row input[type=text]{grid-column:1 / -1;min-height:44px;border:1.5px solid #d7deea;border-radius:12px;padding:10px 12px;font:600 15px "DM Sans"}
+.maintenance-app .consent{border-radius:14px;font:600 14px/1.45 "DM Sans";color:#152347}
+.maintenance-app .signature-pad{border-radius:14px;border:1.5px solid #d7deea}
+.maintenance-app .signature-pad>div{background:#f4f7fd}
+.maintenance-app .signature-pad b{font:800 14px "DM Sans"}
+.maintenance-app .signature-pad canvas{height:180px}
+.maintenance-app .legal{position:static;margin-top:16px;font:500 12px/1.45 "DM Sans"}
+.maintenance-app .save-toast{background:#152347;border-radius:12px;font:700 14px "DM Sans"}
+@media(max-width:760px){
+  .maintenance-app{padding:132px 12px 40px}
+  .maintenance-steps{top:120px}
+  .maintenance-steps a{font-size:13px}
+  .maintenance-app .form-toolbar small{display:none}
+  .maintenance-app .field-grid,.maintenance-app .measure-grid,.maintenance-app .signature-grid{grid-template-columns:1fr}
+  .maintenance-app .control-row{grid-template-columns:1fr}
+  .maintenance-app .form-toolbar button{font-size:13px;padding:8px 10px}
+}
+@media print{
+  .maintenance-steps{display:none!important}
+  .maintenance-app{background:#fff;padding:0;font-family:Arial,sans-serif}
+  .maintenance-app .document-head.compact img{display:block}
+  .maintenance-app .document-head.compact{border-bottom:5px solid #ffcc00;margin-bottom:6mm;padding-bottom:7mm}
+  .maintenance-omit{display:none!important}
+  .maintenance-app .paper{width:210mm;min-height:0;height:auto;margin:0;padding:13mm 12mm;border:0;border-radius:0}
+  .maintenance-app .control-row,.maintenance-app .document-head,.maintenance-app .document-parties,.maintenance-app .signature-pad,.maintenance-app h2{break-inside:avoid;page-break-inside:avoid}
+  .maintenance-app .document-head{display:grid;grid-template-columns:64mm 1fr;border-bottom:5px solid #ffcc00;padding-bottom:7mm}
+  .maintenance-app .document-head>div{background:#405fae;color:#fff;padding:6mm}
+  .maintenance-app .document-head h1{font-size:21px;color:#fff;font-family:Arial,sans-serif}
+  .maintenance-app .document-head span,.maintenance-app .document-head p{color:#e1e8fb}
+  .maintenance-app .paper>h2,.maintenance-app .control-section>h2{background:#405fae;color:#fff;text-align:center;text-transform:uppercase;font:700 11px Arial;letter-spacing:.5px;padding:7px;margin:6mm 0 3mm;border:0}
+  .maintenance-app .field-grid,.maintenance-app .measure-grid{grid-template-columns:repeat(4,1fr);gap:3mm}
+  .maintenance-app .field-grid label>span,.maintenance-app .measure-grid label span{font-size:8px}
+  .maintenance-app .field-grid input,.maintenance-app .field-grid select,.maintenance-app .field-grid textarea,.maintenance-app .measure-grid input{min-height:0;border-radius:5px;font:10px Arial;padding:8px}
+  .maintenance-app .control-head{display:grid}
+  .maintenance-app .control-section{border:1px solid #bdc8db;overflow:visible}
+  .maintenance-app .control-head,.maintenance-app .control-row{grid-template-columns:1fr 18mm 18mm 13mm 42mm;min-width:0;margin:0;padding:0;border-radius:0;background:transparent;font-size:7px}
+  .maintenance-app .control-head{background:#dfe8fa}
+  .maintenance-app .control-row{border:0;border-top:1px solid #d7deea}
+  .maintenance-app .control-row>span{grid-column:auto;padding:4px 6px;font-size:7px}
+  .maintenance-app .control-row label{flex-direction:column;min-height:7mm;border:0;border-radius:0;background:transparent;font-size:6px;color:inherit}
+  .maintenance-app .control-row label:has(input:checked){background:transparent;border:0;color:inherit}
+  .maintenance-app .control-row input[type=text]{grid-column:auto;min-height:7mm;border:0;border-left:1px solid #d7deea;border-radius:0;font-size:7px;padding:3px}
+  .control-row{break-inside:avoid;page-break-inside:avoid}
+  .control-section{break-inside:auto}
+}
+.maintenance-app.maintenance-pdf{width:210mm;padding:0;background:#fff;color:#152347}
+.maintenance-sheet{width:210mm;height:297mm;box-sizing:border-box;padding:12mm 12mm 10mm;background:#fff;display:flex;flex-direction:column;overflow:hidden}
+.maintenance-sheet .sheet-body{flex:1 1 auto;min-height:0;overflow:hidden}
+.maintenance-page-num{flex:0 0 auto;margin-top:3mm;text-align:right;font:10px Arial,sans-serif;color:#5a6a82}
+.maintenance-continue{margin:0 0 4mm;padding-bottom:2mm;border-bottom:2px solid #ffcc00;color:#405fae;font:800 11px Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase}
+.maintenance-pdf .maintenance-steps,.maintenance-pdf .form-toolbar,.maintenance-pdf .control-head,.maintenance-pdf .signature-pad button,.maintenance-pdf .signature-pad small{display:none!important}
+.maintenance-pdf .paper{min-height:0;height:auto;width:auto;margin:0;padding:0;border:0;box-shadow:none}
+.maintenance-pdf .document-head{display:grid;grid-template-columns:42mm 1fr;align-items:center;gap:4mm;border-bottom:4px solid #ffcc00;padding:0 0 4mm;margin:0 0 4mm}
+.maintenance-pdf .document-head img{width:42mm;height:auto}
+.maintenance-pdf .document-head>div{background:#405fae;color:#fff;padding:4mm}
+.maintenance-pdf .document-head span{color:#e1e8fb;font:800 9px Arial,sans-serif;letter-spacing:.08em}
+.maintenance-pdf .document-head h1{margin:1mm 0;color:#fff;font:800 16px Arial,sans-serif}
+.maintenance-pdf .document-head p{margin:0;color:#e1e8fb;font:600 10px Arial,sans-serif}
+.maintenance-pdf h2{margin:4mm 0 2mm;padding:1.5mm 2mm;background:#405fae;color:#fff;text-align:center;text-transform:uppercase;font:700 10px Arial,sans-serif;letter-spacing:.04em}
+.maintenance-pdf .maintenance-fact-row{display:grid;grid-template-columns:1fr 1fr;gap:2mm 4mm;margin:0 0 2mm}
+.maintenance-pdf .maintenance-fact{margin:0}
+.maintenance-pdf .maintenance-fact span{display:block;color:#405fae;font:700 8px Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase}
+.maintenance-pdf .maintenance-fact b{display:block;margin-top:.6mm;color:#152347;font:12px/1.35 Arial,sans-serif;white-space:pre-wrap}
+.maintenance-pdf .maintenance-fact.is-wide{grid-column:1 / -1}
+.maintenance-pdf .control-section{border:0;margin:0}
+.maintenance-pdf .control-row.is-answered{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1mm 4mm;align-items:baseline;padding:1.4mm 0;border-top:1px solid #e3e8f2;font:11px/1.35 Arial,sans-serif;color:#152347}
+.maintenance-pdf .control-row.is-answered b{color:#405fae;font-weight:700}
+.maintenance-pdf .control-row.is-answered small{grid-column:1 / -1;color:#5a6a82}
+.maintenance-pdf .consent{margin:3mm 0;font:11px/1.4 Arial,sans-serif}
+.maintenance-pdf .signature-pad{border:1px solid #d7deea;border-radius:2mm;margin:0 0 3mm}
+.maintenance-pdf .signature-pad canvas,.maintenance-pdf .signature-pad img{display:block;width:100%;height:28mm;object-fit:contain}
+.maintenance-pdf .legal{margin-top:3mm;color:#5a6a82;font:9px/1.4 Arial,sans-serif}
+.maintenance-pdf .document-parties{display:grid;grid-template-columns:1fr 1fr;gap:3mm;margin:0 0 3mm}

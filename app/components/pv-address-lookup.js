@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { MapPin, LoaderCircle } from "lucide-react";
-import { searchFrenchAddresses } from "../lib/pv-geo";
+import { useState } from "react";
+import { LoaderCircle, MapPin } from "lucide-react";
+import { BanSuggestionList, useBanSuggestions } from "./ban-address";
 import { authFetch } from "../lib/supabase-rest";
 
 /**
@@ -13,34 +13,16 @@ export default function PvAddressLookup({
   defaultLabel = "",
 }) {
   const [query, setQuery] = useState(defaultLabel);
-  const [suggestions, setSuggestions] = useState([]);
-  const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [selected, setSelected] = useState(null);
-
-  useEffect(() => {
-    if (query.trim().length < 3 || (selected && selected.label === query)) {
-      setSuggestions([]);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      try {
-        setBusy(true);
-        const rows = await searchFrenchAddresses(query, { limit: 6 });
-        setSuggestions(rows);
-      } catch {
-        setSuggestions([]);
-      } finally {
-        setBusy(false);
-      }
-    }, 280);
-    return () => clearTimeout(timer);
-  }, [query, selected]);
+  const { suggestions, busy, clearSuggestions } = useBanSuggestions(query, {
+    paused: Boolean(selected && selected.label === query),
+  });
 
   async function pick(item) {
     setSelected(item);
     setQuery(item.label);
-    setSuggestions([]);
+    clearSuggestions();
     setStatus("Calcul du productible local…");
     try {
       const response = await authFetch(
@@ -97,20 +79,7 @@ export default function PvAddressLookup({
           {busy && <LoaderCircle size={16} className="spin" />}
         </div>
       </label>
-      {suggestions.length > 0 && (
-        <ul className="pv-address-suggestions">
-          {suggestions.map(item => (
-            <li key={`${item.label}-${item.score}`}>
-              <button type="button" onClick={() => pick(item)}>
-                <b>{item.label}</b>
-                <small>
-                  {item.postcode} {item.city}
-                </small>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <BanSuggestionList suggestions={suggestions} onPick={pick} />
       {status && <p className="pv-address-status">{status}</p>}
       <input type="hidden" name="address" value={selected?.name || selected?.label || ""} />
       <input type="hidden" name="postcode" value={selected?.postcode || ""} />

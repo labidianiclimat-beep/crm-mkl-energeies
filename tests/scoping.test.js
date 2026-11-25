@@ -5,6 +5,14 @@ import {
   canViewOrgWideCommercialData,
   canViewTeamCommercialData,
   resolveScopedCommercialIds,
+  teamMemberIdsFromProfiles,
+  visibleAgendaAppointment,
+  privateAgendaOwnerIds,
+  visibleAgendaRowForViewer,
+  agendaScopeIdsFromProfiles,
+  hiddenAgendaOwnerFilter,
+  agendaRowsForViewer,
+  agendaLayoutForViewer,
 } from "../app/lib/scoping.js";
 import { canViewAllClients } from "../app/lib/clients.js";
 import { canViewAllDevis } from "../app/lib/devis.js";
@@ -24,10 +32,115 @@ test("responsable commercial sees team scope not org-wide", () => {
   assert.deepEqual(resolveScopedCommercialIds(profile, "lead", ["lead", "c1"]).sort(), ["c1", "lead"]);
 });
 
+test("commercial never gets org-wide client or devis lists", () => {
+  const profile = { role: "Commercial" };
+  assert.equal(canViewAllClients(profile), false);
+  assert.equal(canViewAllDevis(profile), false);
+  assert.deepEqual(resolveScopedCommercialIds(profile, "tony", ["lead", "karim"]), ["tony"]);
+});
+
 test("admin and secretariat see org-wide", () => {
   assert.equal(canViewOrgWideCommercialData({ role: "Admin VIP" }), true);
   assert.equal(canViewOrgWideCommercialData({ role: "Secrétariat" }), true);
   assert.equal(resolveScopedCommercialIds({ role: "Direction" }, "u1"), null);
+});
+
+test("le responsable ne voit que les vendeurs rattachés à son nom", () => {
+  const lead = { role: "Responsable commercial", full_name: "Karim Chef", email: "karim@mkl.fr" };
+  const rows = [
+    { id: "lead", role: "Responsable commercial", full_name: "Karim Chef", active: true },
+    { id: "lea", role: "Commercial", full_name: "Léa Martin", manager: "karim chef", active: true },
+    { id: "paul", role: "Commercial", full_name: "Paul Bernard", manager: "", active: true },
+    { id: "ines", role: "Commercial", full_name: "Inès", manager: "Autre chef", active: true },
+    { id: "tech", role: "Technicien", full_name: "Sam", manager: "Karim Chef", active: true },
+  ];
+  assert.deepEqual(teamMemberIdsFromProfiles(lead, "lead", rows).sort(), ["lea", "lead"]);
+});
+
+test("un responsable ne voit pas le rendez-vous d un vendeur hors equipe", () => {
+  const team = ["lead", "c1"];
+  assert.equal(visibleAgendaAppointment({ commercial_id: "c1" }, team), true);
+  assert.equal(visibleAgendaAppointment({ commercialId: "c2", createdBy: "lead", managerId: "lead" }, team), false);
+  assert.equal(visibleAgendaAppointment({ commercial_id: null, created_by: "lead" }, team), true);
+  assert.equal(visibleAgendaAppointment({ commercial_id: "c2" }, null), true);
+});
+
+test("l agenda admin vip reste visible pour lui seul", () => {
+  const owners = privateAgendaOwnerIds([
+    { id: "vip", role: "Admin VIP" },
+    { id: "lea", role: "Commercial" },
+    { id: "dir", role: "Direction" },
+  ]);
+  assert.deepEqual([...owners], ["vip"]);
+  const vipEvent = { commercial_id: "vip" };
+  const leaEvent = { commercial_id: "lea" };
+  const unassigned = { commercial_id: null, created_by: "dir" };
+  assert.equal(visibleAgendaRowForViewer(vipEvent, null, { role: "Admin VIP" }, owners), true);
+  assert.equal(visibleAgendaRowForViewer(leaEvent, null, { role: "Admin VIP" }, owners), true);
+  assert.equal(visibleAgendaRowForViewer(unassigned, null, { role: "Admin VIP" }, owners), true);
+  assert.equal(visibleAgendaRowForViewer(vipEvent, null, { role: "Direction" }, owners), false);
+  assert.equal(visibleAgendaRowForViewer(vipEvent, null, { role: "Secrétariat" }, owners), false);
+  assert.equal(visibleAgendaRowForViewer(vipEvent, null, { role: "Responsable prospection" }, owners), false);
+  assert.equal(visibleAgendaRowForViewer(vipEvent, null, { role: "Superadmin" }, owners), false);
+  assert.equal(visibleAgendaRowForViewer(leaEvent, null, { role: "Direction" }, owners), true);
+  assert.equal(visibleAgendaRowForViewer(unassigned, null, { role: "Responsable prospection" }, owners), true);
+  assert.equal(visibleAgendaRowForViewer(leaEvent, ["lea"], { role: "Commercial" }, owners), true);
+  assert.equal(visibleAgendaRowForViewer(vipEvent, ["lea"], { role: "Commercial" }, owners), false);
+});
+
+test("l agenda du responsable commercial reste limite a ses vendeurs", () => {
+  const lead = { role: "Responsable commercial", full_name: "Ouahib EL OUARIACHI" };
+  const rows = [
+    { id: "lead", role: "Responsable commercial", active: true },
+    { id: "byron", role: "Commercial", manager: "Ouahib EL OUARIACHI", active: true },
+    { id: "leo", role: "Commercial", manager: "Ouahib EL OUARIACHI", active: true },
+    { id: "luca", role: "Commercial", manager: "ouahib el ouariachi", active: true },
+    { id: "tarik", role: "Commercial", manager: "ouahib el ouariachi", active: true },
+    { id: "michael", role: "Commercial", manager: "labidi khaled", active: true },
+    { id: "off", role: "Commercial", manager: "Ouahib EL OUARIACHI", active: false },
+    { id: "tech", role: "Technicien", manager: "Ouahib EL OUARIACHI", active: true },
+  ];
+  assert.deepEqual(agendaScopeIdsFromProfiles(lead, "lead", rows).sort(), ["byron", "lead", "leo", "luca", "tarik"]);
+  assert.equal(agendaScopeIdsFromProfiles({ role: "Superadmin" }, "narina", rows), null);
+  assert.deepEqual(agendaScopeIdsFromProfiles({ role: "Commercial" }, "michael", rows), ["michael"]);
+});
+
+test("les agendas admin vip sont exclus de la lecture des autres roles", () => {
+  const filter = hiddenAgendaOwnerFilter(["vip-1", "vip-2"]);
+  assert.match(filter, /commercial_id\.is\.null/);
+  assert.match(filter, /commercial_id\.neq\.vip-1/);
+  assert.match(filter, /commercial_id\.neq\.vip-2/);
+  assert.equal(hiddenAgendaOwnerFilter([]), "");
+});
+
+test("le responsable commercial garde les rendez-vous de son equipe meme si la liste vendeurs est incomplete", () => {
+  const lead = { role: "Responsable commercial", full_name: "Ouahib EL OUARIACHI" };
+  const rows = [
+    { id: "simon", commercialId: "byron", prospectName: "SIMON SCHELKSHORN" },
+    { id: "charlotte", commercialId: "leo", prospectName: "OBER CHARLOTTE" },
+    { id: "laurent", commercialId: "luca", prospectName: "ELBERHARDT LAURENT" },
+    { id: "vip", commercialId: "vip", prospectName: "Agenda privé" },
+  ];
+  const shown = agendaRowsForViewer(rows, lead, {
+    commercials: [{ id: "lead", role: "Responsable commercial", name: "Ouahib" }],
+    currentUserId: "lead",
+    privateOwnerIds: new Set(["vip"]),
+  }).map(item => item.id);
+  assert.deepEqual(shown, ["simon", "charlotte", "laurent"]);
+  const layout = agendaLayoutForViewer(lead, {
+    hidden: { leo: true, luca: true },
+    filters: { commercialId: "byron", kind: "rendez-vous", status: "" },
+    colors: { byron: "#112233" },
+  });
+  assert.deepEqual(layout.hidden, {});
+  assert.equal(layout.filters.commercialId, "");
+  assert.equal(layout.filters.kind, "rendez-vous");
+  assert.equal(layout.colors.byron, "#112233");
+  const own = agendaRowsForViewer(rows, { role: "Commercial" }, {
+    commercials: [{ id: "byron", role: "Commercial" }],
+    currentUserId: "byron",
+  }).map(item => item.id);
+  assert.deepEqual(own, ["simon"]);
 });
 
 test("builds postgrest or filter for scoped ids", () => {

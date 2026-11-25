@@ -7,13 +7,16 @@ import {
   formToArticleRecord,
   validateArticlePayload,
 } from "../../lib/articles";
+import { isMissingRelation, taxonomyNamesEqual } from "../../lib/article-taxonomy";
 import { serviceRequest, serviceRoleConfigured } from "../../lib/supabase-server";
 
 export const runtime = "nodejs";
 
 const SELECT_CORE =
   "id,organization_id,reference,designation,description,description_technique,categorie,sous_categorie,marque,prix_achat_ht,prix_vente_ht,taux_tva,unite,actif,power_w,source_reference,created_at,updated_at,created_by";
-const SELECT = `${SELECT_CORE.replace(",marque,", ",marque,brand_id,")}`;
+const SELECT_BRAND = `${SELECT_CORE.replace(",marque,", ",marque,brand_id,")}`;
+const SELECT_TAXONOMY = `${SELECT_BRAND.replace(",brand_id,", ",brand_id,category_id,subcategory_id,")}`;
+const SELECT = `${SELECT_TAXONOMY.replace(",created_by", ",fiche_nom,fiche_data,created_by")}`;
 
 async function fetchArticleRows(orgId, { activeOnly = false, id } = {}) {
   const filter = id
@@ -24,8 +27,95 @@ async function fetchArticleRows(orgId, { activeOnly = false, id } = {}) {
   try {
     return await serviceRequest(build(SELECT));
   } catch (error) {
-    if (/brand_id/i.test(String(error?.message || ""))) {
+    const message = String(error?.message || "");
+    if (/fiche_nom|fiche_data/i.test(message)) {
+      try {
+        return await serviceRequest(build(SELECT_TAXONOMY));
+      } catch (inner) {
+        if (/category_id|subcategory_id/i.test(String(inner?.message || ""))) {
+          try {
+            return await serviceRequest(build(SELECT_BRAND));
+          } catch (nested) {
+            if (/brand_id/i.test(String(nested?.message || ""))) return serviceRequest(build(SELECT_CORE));
+            throw nested;
+          }
+        }
+        if (/brand_id/i.test(String(inner?.message || ""))) return serviceRequest(build(SELECT_CORE));
+        throw inner;
+      }
+    }
+    if (/category_id|subcategory_id/i.test(message)) {
+      try {
+        return await serviceRequest(build(SELECT_BRAND));
+      } catch (inner) {
+        if (/brand_id/i.test(String(inner?.message || ""))) return serviceRequest(build(SELECT_CORE));
+        throw inner;
+      }
+    }
+    if (/brand_id/i.test(message)) {
       return serviceRequest(build(SELECT_CORE));
+    }
+    throw error;
+  }
+}
+
+async function allowedCategoryNames(orgId) {
+  try {
+    const rows = await serviceRequest(
+      `/rest/v1/article_categories?select=name,actif&organization_id=eq.${encodeURIComponent(orgId)}`
+    );
+    return (rows || []).filter(row => row.actif !== false).map(row => row.name);
+  } catch (error) {
+    if (isMissingRelation(error, "article_categories")) return [];
+    return [];
+  }
+}
+
+async function resolveTaxonomyIds(orgId, record) {
+  try {
+    if (!record.category_id && record.categorie) {
+      const cats = await serviceRequest(
+        `/rest/v1/article_categories?select=id,name&organization_id=eq.${encodeURIComponent(orgId)}`
+      );
+      const match = (cats || []).find(row => taxonomyNamesEqual(row.name, record.categorie));
+      if (match) record.category_id = match.id;
+    }
+    if (record.category_id && !record.subcategory_id && record.sous_categorie) {
+      const subs = await serviceRequest(
+        `/rest/v1/article_subcategories?select=id,name,category_id&organization_id=eq.${encodeURIComponent(orgId)}&category_id=eq.${encodeURIComponent(record.category_id)}`
+      );
+      const match = (subs || []).find(row => taxonomyNamesEqual(row.name, record.sous_categorie));
+      if (match) record.subcategory_id = match.id;
+    }
+  } catch (error) {
+    if (isMissingRelation(error, "article_categories") || isMissingRelation(error, "article_subcategories")) {
+      delete record.category_id;
+      delete record.subcategory_id;
+    }
+  }
+  return record;
+}
+
+async function persistArticle(path, method, record) {
+  try {
+    return await serviceRequest(path, {
+      method,
+      headers: { Prefer: "return=representation" },
+      body: record,
+    });
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (/category_id|subcategory_id/i.test(message)) {
+      const { category_id: _c, subcategory_id: _s, ...rest } = record;
+      return persistArticle(path, method, rest);
+    }
+    if (/fiche_nom|fiche_data/i.test(message)) {
+      const { fiche_nom: _n, fiche_data: _d, ...rest } = record;
+      return persistArticle(path, method, rest);
+    }
+    if (/brand_id/i.test(message)) {
+      const { brand_id: _ignored, ...legacy } = record;
+      return persistArticle(path, method, legacy);
     }
     throw error;
   }
@@ -70,7 +160,9 @@ export async function POST(request) {
       createdBy: auth.user.id,
     });
 
-    const errors = validateArticlePayload(record);
+    await resolveTaxonomyIds(auth.profile.organization_id, record);
+    const allowedCategories = await allowedCategoryNames(auth.profile.organization_id);
+    const errors = validateArticlePayload(record, { allowedCategories });
     if (errors.length) {
       return Response.json({ error: errors[0], errors }, { status: 400 });
     }
@@ -81,25 +173,7 @@ export async function POST(request) {
     }
 
     record.created_at = new Date().toISOString();
-    let rows;
-    try {
-      rows = await serviceRequest("/rest/v1/articles", {
-        method: "POST",
-        headers: { Prefer: "return=representation" },
-        body: record,
-      });
-    } catch (error) {
-      if (/brand_id/i.test(String(error?.message || ""))) {
-        const { brand_id: _ignored, ...legacy } = record;
-        rows = await serviceRequest("/rest/v1/articles", {
-          method: "POST",
-          headers: { Prefer: "return=representation" },
-          body: legacy,
-        });
-      } else {
-        throw error;
-      }
-    }
+    const rows = await persistArticle("/rest/v1/articles", "POST", record);
     return Response.json({ article: articleToUi(rows?.[0]) }, { status: 201 });
   } catch (error) {
     console.error("Article create error", error.message);

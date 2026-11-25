@@ -18,8 +18,8 @@ export const runtime = "nodejs";
 const ADMIN_MODULES = [
   "Tableau de bord", "Prospects", "Agenda commercial", "Clients", "Devis", "Factures",
   "Factures pro forma", "Demandes de chiffrage", "Fournisseurs", "Planning", "Chantiers",
-  "Équipes d'installation", "Maintenance", "Photovoltaïque administratif", "Visites techniques",
-  "Gestion des articles", "Utilisateurs",
+    "Équipes d'installation", "Maintenance", "Photovoltaïque administratif", "Études thermiques", "Visites techniques",
+  "Gestion des articles", "Grilles tarifaires PDF", "Utilisateurs",
 ];
 
 export async function POST(request) {

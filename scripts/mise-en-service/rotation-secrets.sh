@@ -1,0 +1,304 @@
+#!/bin/sh
+# Renouvellement de CRM_ACCESS_PIN et GOOGLE_SOLAR_API_KEY, sans coupure.
+#
+#   sh scripts/mise-en-service/rotation-secrets.sh --etat
+#   sh scripts/mise-en-service/rotation-secrets.sh --pin-ouvrir     [--production]
+#   sh scripts/mise-en-service/rotation-secrets.sh --pin-refermer   [--production]
+#   sh scripts/mise-en-service/rotation-secrets.sh --solar-eprouver
+#   sh scripts/mise-en-service/rotation-secrets.sh --solar          [--production]
+#
+# Le principe, en deux temps. « --pin-ouvrir » publie le nouveau code tout en
+# déclarant l'ancien comme précédent : les deux fonctionnent, personne n'est
+# bloqué. Une fois les équipes prévenues, « --pin-refermer » retire l'ancien.
+# Sans cette fenêtre, un renouvellement est une interruption de service.
+#
+# La cible par défaut est PREVIEW. La production exige « --production » et une
+# confirmation tapée à la main : aucun secret de production ne bouge sans un
+# geste explicite.
+#
+# Aucune valeur n'est affichée, ni écrite dans un fichier du dépôt. Les saisies
+# se font à l'écran masqué.
+
+set -eu
+
+export PATH="$HOME/.mkl-clis/bin:$PATH"
+RACINE="$(cd "$(dirname "$0")/../.." && pwd)"
+CIBLE="preview"
+ACTION=""
+
+arret() { printf '\n  %s\n\n' "$1" >&2; exit 2; }
+
+for ARG in "$@"; do
+  case "$ARG" in
+    --production) CIBLE="production" ;;
+    --etat|--pin-ouvrir|--pin-refermer|--solar|--solar-eprouver) ACTION="$ARG" ;;
+    *) arret "Argument inconnu : $ARG" ;;
+  esac
+done
+[ -n "$ACTION" ] || arret "Indiquez --etat, --pin-ouvrir, --pin-refermer, --solar-eprouver ou --solar."
+
+# L'épreuve n'écrit nulle part : exiger le client Vercel la rendrait
+# dépendante d'un outil qu'elle n'utilise pas, et « --production » n'y aurait
+# aucun sens puisqu'elle ne touche à aucun environnement.
+if [ "$ACTION" = "--solar-eprouver" ]; then
+  [ "$CIBLE" = "preview" ] \
+    || arret "« --solar-eprouver » ne touche à aucun environnement : retirez --production."
+else
+  command -v vercel >/dev/null 2>&1 || arret "La commande « vercel » est introuvable."
+fi
+
+# Empreinte, jamais la clé. Elle sert à vérifier plus tard que la valeur
+# publiée est bien celle qui a été éprouvée, sans conserver le secret.
+EMPREINTES="$HOME/.mkl-secrets/solar-empreinte"
+
+empreinte_de() {
+  printf '%s' "$1" | shasum -a 256 | cut -c1-16
+}
+
+demander() {
+  # $1 = intitulé. La valeur est rendue sur la sortie standard, jamais à l'écran.
+  printf '  %s (saisie invisible) : ' "$1" >&2
+  stty -echo 2>/dev/null || arret "Pas de terminal : lancez ce script dans le Terminal."
+  IFS= read -r REPONSE
+  stty echo 2>/dev/null || true
+  printf '\n' >&2
+  printf '%s' "$REPONSE"
+}
+
+confirmer() {
+  printf '\n  Cible : %s\n' "$(printf '%s' "$CIBLE" | tr '[:lower:]' '[:upper:]')" >&2
+  printf '  %s\n' "$1" >&2
+  printf '  Tapez exactement « %s » pour poursuivre : ' "$2" >&2
+  IFS= read -r SAISIE
+  [ "$SAISIE" = "$2" ] || arret "Confirmation absente : rien n'a été modifié."
+}
+
+eprouver_solar() {
+  # $1 = clé. Un seul appel, sur les deux points d'entrée réellement utilisés
+  # par le CRM. Publier une clé muette échangerait un secret exposé contre une
+  # panne de l'étude photovoltaïque : autant le savoir avant.
+  CLE_A_TESTER="$1"
+  for POINT in \
+    "buildingInsights:findClosest?location.latitude=43.2965&location.longitude=5.3698&requiredQuality=BASE" \
+    "dataLayers:get?location.latitude=43.2965&location.longitude=5.3698&radiusMeters=50&view=IMAGERY_AND_ANNUAL_FLUX_LAYERS&requiredQuality=BASE&pixelSizeMeters=0.5"
+  do
+    NOM="${POINT%%:*}"
+    # La clé voyage en paramètre, comme l'exige l'API, mais n'apparaît ni à
+    # l'écran ni dans un fichier : seul le code de réponse est conservé.
+    CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+      "https://solar.googleapis.com/v1/${POINT}&key=${CLE_A_TESTER}" 2>/dev/null || echo 000)"
+    case "$CODE" in
+      200) printf '  ✓ %s répond\n' "$NOM" >&2 ;;
+      403) arret "$NOM refuse la clé (403). L'API Solar est-elle activée, et la restriction d'API l'autorise-t-elle ?" ;;
+      400) arret "$NOM renvoie 400 : Google ne reconnaît pas cette clé. Mal copiée, ou issue d'un autre projet ?" ;;
+      429) arret "$NOM renvoie 429 : quota épuisé. Clé non publiée." ;;
+      000) arret "Aucune réponse de Google. Rien n'a été modifié." ;;
+      *)   arret "$NOM renvoie $CODE. Clé non publiée." ;;
+    esac
+  done
+}
+
+retirer() {
+  # $1 = nom. « --environment » n'est pas une élégance mais une sûreté : le
+  # client le dit lui-même, « sans cette option, la variable est retirée de
+  # TOUS ses environnements ». Une suppression visant la recette aurait donc
+  # pu emporter celle de la production si la forme positionnelle, déclarée
+  # obsolète, cessait un jour d'être honorée.
+  [ -n "$CIBLE" ] || arret "Environnement cible vide : suppression refusée."
+  vercel env rm "$1" --environment "$CIBLE" --yes >/dev/null 2>&1
+}
+
+presente() {
+  # $1 = nom. Le tableau de « vercel env ls » part à la fois sur la sortie
+  # standard et sur celle d'erreur : les deux sont lues, sinon la réponse
+  # dépendrait d'un détail d'implémentation du client.
+  vercel env ls --environment "$CIBLE" 2>&1 | grep -q "^[[:space:]]*$1[[:space:]]"
+}
+
+poser() {
+  # $1 = nom, $2 = valeur. Sans --force : une entrée existante n'est jamais
+  # écrasée par accident, il faut la retirer d'abord et le voir.
+  #
+  # Le code de sortie du client ne suffit pas à conclure. Un essai a déjà
+  # rapporté un succès pour une variable qui ne s'est jamais trouvée dans
+  # l'environnement visé : annoncer une pose qui n'a pas eu lieu est pire
+  # qu'un échec, puisque personne ne va vérifier. La présence est donc
+  # relue, et c'est elle qui décide.
+  # La sortie du client était masquée par précaution. C'était une précaution
+  # mal placée : le client n'imprime jamais la valeur, et la masquer nous a
+  # privés du seul message capable d'expliquer un refus. Elle est donc
+  # conservée, puis purgée par sécurité de toute occurrence de la valeur
+  # avant d'être montrée.
+  # « --environment » et non l'argument positionnel, que le client déclare
+  # obsolète. Sans cette option il « demande quand elle est omise » : sur une
+  # entrée déjà consommée par la valeur, la réponse à cette question est
+  # imprévisible. Et « --yes » écarte toute question restante.
+  RAPPORT="$(printf '%s' "$2" \
+    | vercel env add "$1" --environment "$CIBLE" --yes 2>&1 || true)"
+  RAPPORT="$(printf '%s' "$RAPPORT" | sed "s|$2|«valeur masquée»|g")"
+  printf '%s\n' "$RAPPORT" | sed -n 's/^/    /p'
+  # Également consigné, purgé, hors du dépôt : un diagnostic ne devrait pas
+  # dépendre de ce qui reste lisible dans une fenêtre de terminal.
+  printf '%s\n' "$RAPPORT" > "${TMPDIR:-/tmp}/mkl-rapport-$1.txt" 2>/dev/null || true
+  # La propagation n'est pas instantanée côté Vercel : quelques essais
+  # espacés valent mieux qu'un verdict rendu trop tôt.
+  ESSAI=0
+  while [ "$ESSAI" -lt 6 ]; do
+    if presente "$1"; then
+      printf '  ✓ %s posée sur %s, et relue sur place\n' "$1" "$CIBLE"
+      return 0
+    fi
+    ESSAI=$((ESSAI + 1))
+    sleep 2
+  done
+  printf '\n  %s n apparaît pas sur %s. Rien ne doit être tenu pour posé.\n' "$1" "$CIBLE" >&2
+  printf '  Le message du client, ci-dessus, dit pourquoi. Si la variable existe\n' >&2
+  printf '  déjà sur un autre environnement, il faut la poser depuis le tableau\n' >&2
+  printf '  de bord Vercel, qui sait rattacher un nom à plusieurs environnements.\n' >&2
+  arret "Opération interrompue. Aucun environnement n'a été modifié de façon utile."
+}
+
+# ---------------------------------------------------------------------------
+case "$ACTION" in
+# ---------------------------------------------------------------------------
+
+--etat)
+  printf '\n  État du renouvellement — %s\n' "$CIBLE"
+  printf '  ─────────────────────────────────────\n'
+  # Les deux flux, pour la raison dite dans « presente ».
+  LISTE="$(vercel env ls --environment "$CIBLE" 2>&1 || true)"
+  for NOM in CRM_ACCESS_PIN CRM_ACCESS_PIN_PRECEDENT CRM_SESSION_SECRET \
+             CRM_SESSION_SECRET_PRECEDENT GOOGLE_SOLAR_API_KEY; do
+    if printf '%s' "$LISTE" | grep -q "^[[:space:]]*$NOM[[:space:]]"; then
+      printf '  %-32s déclarée\n' "$NOM"
+    else
+      printf '  %-32s absente\n' "$NOM"
+    fi
+  done
+  printf '\n  Aucune valeur n a été lue : seuls les noms sont consultés.\n'
+  if printf '%s' "$LISTE" | grep -q "CRM_ACCESS_PIN_PRECEDENT"; then
+    printf '  Une fenêtre de tolérance est OUVERTE : pensez à la refermer.\n'
+  fi
+  printf '\n'
+  ;;
+
+--pin-ouvrir)
+  printf '\n  Ouverture de la fenêtre sur le code d accès\n'
+  printf '  ──────────────────────────────────────────\n'
+  printf '  L ancien code reste valable le temps que les équipes basculent.\n'
+  printf '  Les sessions en cours ne sont pas touchées : le secret de session\n'
+  printf '  est une variable distincte.\n\n'
+
+  ANCIEN="$(demander 'Code actuel, celui qui doit rester valable')"
+  NOUVEAU="$(demander 'Nouveau code')"
+  REPETE="$(demander 'Nouveau code, à nouveau')"
+
+  [ "$NOUVEAU" = "$REPETE" ] || arret "Les deux saisies du nouveau code diffèrent."
+  [ "$NOUVEAU" != "$ANCIEN" ] || arret "Le nouveau code est identique à l'ancien."
+  case "$NOUVEAU" in
+    *[!0-9]*) arret "Le code doit être numérique." ;;
+  esac
+  [ "${#NOUVEAU}" -ge 4 ] || arret "Le code doit faire au moins quatre chiffres."
+  [ "${#ANCIEN}" -ge 4 ] || arret "L'ancien code semble incomplet."
+
+  confirmer "Le nouveau code sera publié, l'ancien restant accepté." "renouveler"
+
+  poser CRM_ACCESS_PIN_PRECEDENT "$ANCIEN"
+  retirer CRM_ACCESS_PIN
+  poser CRM_ACCESS_PIN "$NOUVEAU"
+
+  printf '\n  Les variables sont posées. Elles ne prennent effet qu au prochain\n'
+  printf '  déploiement : Vercel fige l environnement à la création de celui-ci.\n'
+  printf '  Déploiement à lancer séparément, avec votre accord.\n\n'
+  ;;
+
+--pin-refermer)
+  printf '\n  Fermeture de la fenêtre\n'
+  printf '  ───────────────────────\n'
+  printf '  L ancien code sera définitivement révoqué.\n'
+  confirmer "CRM_ACCESS_PIN_PRECEDENT va être retirée." "refermer"
+  if retirer CRM_ACCESS_PIN_PRECEDENT; then
+    printf '  ✓ ancien code révoqué sur %s\n' "$CIBLE"
+  else
+    printf '  (la variable n était pas déclarée : rien à retirer)\n'
+  fi
+  printf '\n  Effectif au prochain déploiement.\n\n'
+  ;;
+
+--solar-eprouver)
+  printf '\n  Épreuve de la nouvelle clé Google Solar\n'
+  printf '  ──────────────────────────────────────\n'
+  printf '  Cette étape ne touche à rien : ni Vercel, ni la production, ni le\n'
+  printf '  CRM. Elle interroge seulement Google pour savoir si la clé répond.\n\n'
+
+  CLE="$(demander 'Nouvelle clé Google Solar')"
+  [ "${#CLE}" -ge 20 ] || arret "La clé semble trop courte."
+  case "$CLE" in
+    *[!A-Za-z0-9_-]*) arret "La clé contient un caractère inattendu : ligne copiée en trop ?" ;;
+  esac
+
+  printf '  Interrogation des deux points d entrée utilisés par le CRM :\n'
+  eprouver_solar "$CLE"
+
+  # Seule l'empreinte est conservée. Au moment de publier, la clé sera saisie
+  # de nouveau : les rapprocher écarte la faute de copie qui ferait publier
+  # une valeur voisine de celle qui vient d'être éprouvée.
+  mkdir -p "$(dirname "$EMPREINTES")"
+  umask 077
+  empreinte_de "$CLE" > "$EMPREINTES"
+  chmod 600 "$EMPREINTES"
+
+  printf '\n  La clé fonctionne, et elle est bien restreinte à l API Solar.\n'
+  printf '  Rien n a été publié. Aucune clé n a été enregistrée : seule une\n'
+  printf '  empreinte de contrôle, dans %s\n' "$EMPREINTES"
+  printf '\n  Étape suivante, avec votre accord :\n'
+  printf '    sh scripts/mise-en-service/rotation-secrets.sh --solar --production\n\n'
+  ;;
+
+--solar)
+  printf '\n  Renouvellement de la clé Google Solar\n'
+  printf '  ────────────────────────────────────\n'
+  printf '  Cette clé ne sert que côté serveur : aucun utilisateur ne la détient,\n'
+  printf '  donc aucune fenêtre de tolérance n est nécessaire. L ordre suffit :\n'
+  printf '  créer la nouvelle, la publier, déployer, vérifier, puis supprimer\n'
+  printf '  l ancienne dans la console Google — et pas avant.\n\n'
+
+  CLE="$(demander 'Nouvelle clé Google Solar')"
+  [ "${#CLE}" -ge 20 ] || arret "La clé semble trop courte."
+  case "$CLE" in
+    *[!A-Za-z0-9_-]*) arret "La clé contient un caractère inattendu : ligne copiée en trop ?" ;;
+  esac
+
+  if [ -r "$EMPREINTES" ]; then
+    if [ "$(empreinte_de "$CLE")" = "$(cat "$EMPREINTES")" ]; then
+      printf '  ✓ c est bien la clé déjà éprouvée\n'
+    else
+      arret "Cette clé n est pas celle qui a été éprouvée. Reprenez --solar-eprouver plutôt que de publier une valeur inconnue."
+    fi
+  else
+    printf '  (aucune épreuve préalable enregistrée : la clé va être éprouvée maintenant)\n'
+  fi
+
+  printf '\n  Vérification de la clé auprès de Google, avant toute publication :\n'
+  eprouver_solar "$CLE"
+
+  confirmer "GOOGLE_SOLAR_API_KEY va être remplacée." "remplacer"
+  retirer GOOGLE_SOLAR_API_KEY || true
+  poser GOOGLE_SOLAR_API_KEY "$CLE"
+
+  # L'empreinte ne disparaît qu'une fois la production servie. La retirer dès
+  # la recette obligerait à publier en production sans ce rapprochement, c'est
+  # à dire à l'endroit où il est le plus utile.
+  if [ "$CIBLE" = "production" ]; then
+    rm -f "$EMPREINTES"
+  else
+    printf '  (empreinte conservée pour l étape de production)\n'
+  fi
+
+  printf '\n  Le CRM en ligne continue d utiliser l ancienne clé : une variable\n'
+  printf '  ne prend effet qu au déploiement suivant. Rien n est interrompu.\n'
+  printf '\n  Ne supprimez l ancienne clé dans Google Cloud qu APRÈS avoir vérifié\n'
+  printf '  le calcul de production photovoltaïque sur le déploiement.\n\n'
+  ;;
+
+esac

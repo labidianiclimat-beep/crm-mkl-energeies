@@ -1,0 +1,55 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { downloadPdfName, pdfFilename } from "../app/lib/html-to-pdf.js";
+
+test("pdfFilename nettoie le titre et ajoute .pdf", () => {
+  assert.equal(pdfFilename("Devis DEV-2026-001"), "Devis-DEV-2026-001.pdf");
+  assert.equal(pdfFilename("Étude thermique"), "Etude-thermique.pdf");
+  assert.equal(pdfFilename("rapport.pdf"), "rapport.pdf");
+  assert.equal(pdfFilename(""), "document.pdf");
+  assert.equal(downloadPdfName("Devis Muller Roland DEV-2026-0042.pdf"), "Devis Muller Roland DEV-2026-0042.pdf");
+  assert.equal(downloadPdfName("Devis DEV-2026-001"), "Devis-DEV-2026-001.pdf");
+});
+
+test("les telechargements documents passent par un PDF", () => {
+  const preview = readFileSync(new URL("../app/lib/document-preview.js", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  const photos = readFileSync(new URL("../app/components/previsit-photos-panel.js", import.meta.url), "utf8");
+  const previsit = readFileSync(new URL("../app/previsite/page.js", import.meta.url), "utf8");
+  const maintenance = readFileSync(new URL("../app/maintenance-form/page.js", import.meta.url), "utf8");
+  const contract = readFileSync(new URL("../app/maintenance-contract/page.js", import.meta.url), "utf8");
+  const pdf = readFileSync(new URL("../app/lib/html-to-pdf.js", import.meta.url), "utf8");
+  assert.match(preview, /downloadHtmlAsPdf/);
+  assert.doesNotMatch(preview, /window\.open\(""\s*,\s*"_blank"\)/);
+  assert.match(pdf, /data-pdf-host/);
+  assert.match(pdf, /mountPrintableHtml/);
+  assert.match(pdf, /html2canvas/);
+  assert.match(pdf, /jspdf/);
+  assert.match(pdf, /addImage/);
+  assert.match(pdf, /"opacity:1"/);
+  assert.doesNotMatch(pdf, /z-index:-1/);
+  assert.match(pdf, /display = sheetIndex === index \? "" : "none"/);
+  assert.match(pdf, /addCanvasPage/);
+  assert.match(pdf, /A4_PX/);
+  assert.match(pdf, /paginateFlowSheets/);
+  assert.match(pdf, /sheet-flow/);
+  assert.doesNotMatch(pdf, /heightLeft/);
+  assert.match(pdf, /link.download = name/);
+  assert.match(pdf, /application\/pdf/);
+  assert.match(pdf, /reservePdfTab/);
+  assert.match(pdf, /isStandaloneDisplay/);
+  assert.match(pdf, /needsInAppPdfViewer/);
+  assert.match(pdf, /isIosDevice/);
+  assert.match(pdf, /mkl-pdf-overlay/);
+  assert.match(pdf, /Retour à l’application/);
+  assert.match(pdf, /mklPdfOverlay/);
+  assert.match(pdf, /embed type="application\/pdf"/);
+  assert.match(pdf, /pdfFrameHtml/);
+  assert.match(page, /downloadHtmlAsPdf/);
+  assert.doesNotMatch(page, /type:"text\/html"/);
+  assert.match(photos, /triggerBlobDownload/);
+  assert.match(previsit, /openCurrentFormPreview/);
+  assert.match(maintenance, /openCurrentFormPreview/);
+  assert.match(contract, /openCurrentFormPreview/);
+});

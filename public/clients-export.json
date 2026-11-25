@@ -1,5 +1,5 @@
 ﻿[
-  {
+    {
     "id": "demo-1001",
     "externalId": "1001",
     "name": "Jean Dupont (exemple)",
@@ -98,5 +98,5 @@
     "projectType": "Pompe à chaleur + PV",
     "install": "Hybride",
     "status": "Client exemple"
-  }
+    }
 ]

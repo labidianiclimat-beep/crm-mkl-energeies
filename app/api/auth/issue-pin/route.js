@@ -18,8 +18,8 @@ const MIN_SECRET_LENGTH = 24;
 /**
  * Route d'exploitation, sans interface : elle sert à réémettre un PIN de
  * connexion quand plus aucun administrateur ne peut se connecter. Le parcours
- * normal est l'écran Utilisateurs (POST /api/users/invite ou
- * /api/users/resend-pin), qui exige une session administrateur.
+ * normal est le bouton Envoyer du listing Utilisateurs
+ * (POST /api/users/resend-pin), qui exige une session administrateur.
  *
  * Le secret doit être dédié et long : accepter CRM_ACCESS_PIN, un code d'équipe
  * à quatre chiffres, permettait à un inconnu d'obtenir un PIN de connexion

@@ -33,6 +33,8 @@ function normalizeAttachments(attachments = []) {
     filename: attachment.filename,
     content: Buffer.from(attachment.content, "base64"),
     contentType: attachment.contentType || "application/octet-stream",
+    cid: attachment.cid || undefined,
+    contentDisposition: attachment.cid ? "inline" : "attachment",
   }));
 }
 

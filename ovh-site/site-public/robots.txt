@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Pages et zones non publiques
+Disallow: /admin.html
+Disallow: /api/
+Disallow: /data/
+
+Sitemap: https://mkl-energies.fr/sitemap.xml

@@ -7,8 +7,10 @@ import assert from "node:assert/strict";
 import {
   canAssignClientCommercial,
   canViewAllClients,
+  clientDuplicateConflict,
   findClientDuplicates,
   formToClientRecord,
+  splitScopedDuplicates,
   validateClientPayload,
 } from "../app/lib/clients.js";
 import {
@@ -57,6 +59,17 @@ test("CLIENTS — création / validation / doublons / attribution", () => {
   assert.equal(canViewAllClients({ role: "Admin VIP" }), true);
   assert.equal(canAssignClientCommercial({ role: "Responsable commercial" }), true);
   assert.equal(canAssignClientCommercial({ role: "Commercial" }), false);
+  const hidden = clientDuplicateConflict([]);
+  assert.equal(hidden.duplicates.length, 0);
+  assert.match(hidden.error, /secrétariat/i);
+  const scoped = splitScopedDuplicates(
+    [{ id: "x", organization_id: "org", commercial_id: "other", created_by: "other" }],
+    { role: "Commercial", organization_id: "org" },
+    "me",
+    ["me"]
+  );
+  assert.equal(scoped.visible.length, 0);
+  assert.equal(scoped.hidden.length, 1);
 });
 
 test("ARTICLES — création / recherche / TVA prix / désactivation logique", () => {
@@ -143,6 +156,15 @@ test("DEVIS sécurité — commercial 2 ne lit pas client/devis commercial 1", (
       { role: "Commercial", organization_id: "org" },
       "com-2",
       row
+    ),
+    false
+  );
+  const prospect = { organization_id: "org", commercial_id: "com-1", created_by: "com-1" };
+  assert.equal(
+    canAccessScopedRow(
+      { role: "Commercial", organization_id: "org" },
+      "com-2",
+      prospect
     ),
     false
   );

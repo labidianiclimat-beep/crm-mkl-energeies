@@ -1,3 +1,7 @@
+import { isDevisOwnerRole } from "./devis.js";
+import { maintenanceTtc } from "./entretien-agenda.js";
+import { commercialSaleTotals } from "./commercial-sale.js";
+
 /** Métriques tableau de bord commercial (ÉTAPE 11). */
 
 export const DEVIS_EN_COURS_STATUSES = ["Brouillon", "À valider", "Envoyé", "À relancer"];
@@ -21,6 +25,7 @@ export function computeCommercialDashboard({
   clients = [],
   prospects = [],
   appointments = [],
+  sales = [],
   now = Date.now(),
 } = {}) {
   const quotes = (devis || []).filter(item => (item.kind || "Devis") === "Devis");
@@ -29,6 +34,7 @@ export function computeCommercialDashboard({
   const devisAcceptes = quotes.filter(item => item.status === "Accepté");
   const devisRefuses = quotes.filter(item => item.status === "Refusé");
   const caSigne = devisAcceptes.reduce((sum, item) => sum + Number(item.totalTTC ?? item.total_ttc ?? 0), 0);
+  const verified = commercialSaleTotals(sales);
   const decided = devisAcceptes.length + devisRefuses.length;
   const tauxTransformation = decided > 0 ? Math.round((devisAcceptes.length / decided) * 1000) / 10 : 0;
 
@@ -70,6 +76,9 @@ export function computeCommercialDashboard({
     devisARelancerCount: devisARelancer.length,
     devisAcceptesCount: devisAcceptes.length,
     caSigne,
+    caSigneHistorique: caSigne,
+    caSigneBrutVerifie: verified.brut,
+    caSigneNetVerifie: verified.net,
     tauxTransformation,
     pipelineValue: devisEnCours.reduce((sum, item) => sum + Number(item.totalTTC ?? item.total_ttc ?? 0), 0),
     clientsCount: (clients || []).length,
@@ -105,10 +114,228 @@ export function filterDevisByPeriod(devis, from, to) {
   });
 }
 
+/**
+ * Ventes vérifiées retenues pour les cartes et le classement.
+ * La période est le jour civil de confirmed_at en Europe/Paris, bornes
+ * inclusives. Le brut et le net ne changent pas : ils suivent le statut
+ * actuel. Une annulation reste dans le mois de la confirmation. Une vente
+ * remplacée n'entre ni dans le brut ni dans le net ; l'avenant suit sa
+ * propre confirmation. Sans date de confirmation, la vente sort d'une
+ * période bornée et reste visible seulement sans filtre de dates.
+ * L'activité est celle du devis historique : le libellé ou le nom du client
+ * contient le filtre. Aucune famille d'article n'est déduite. La maintenance
+ * continue de lire les contrats, pas les signatures.
+ */
+export function filterVerifiedSales(sales, { from = "", to = "", activity = "" } = {}) {
+  let rows = sales || [];
+  if (from || to) {
+    rows = rows.filter(sale => {
+      const day = calendarDay(sale?.confirmedAt || sale?.confirmed_at);
+      return Boolean(day) && dayInPeriod(day, from, to);
+    });
+  }
+  if (activity && !isMaintenanceActivity(activity)) {
+    rows = rows.filter(sale => filterByActivity(
+      [{ label: sale?.label || "", client: sale?.client || "" }],
+      activity,
+      ["label", "client"],
+    ).length > 0);
+  }
+  return rows;
+}
+
+export function isMaintenanceActivity(activity) {
+  return String(activity || "").trim().toLowerCase() === "maintenance";
+}
+
+export function isOrganizationAgency(agency) {
+  const key = String(agency || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  if (!key) return true;
+  return key === "mkl" || key === "mkl energies" || key === "toutes";
+}
+
+function calendarDay(value) {
+  const raw = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw) && !/[zZ]|[+-]\d{2}:\d{2}$/.test(raw)) return raw.slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Paris" }).format(date);
+}
+
+function dayInPeriod(day, from, to) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  if (from && day < from) return false;
+  if (to && day > to) return false;
+  return true;
+}
+
+export function moneyAmount(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const text = String(value ?? "").trim().replace(/\s/g, "").replace(",", ".");
+  if (!text) return null;
+  const amount = Number(text);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+export function contractsPlacedInPeriod(contracts = [], { from = "", to = "", visits = [] } = {}) {
+  const dated = Boolean(from || to);
+  const visitedClients = new Set();
+  for (const visit of visits || []) {
+    if (visit?.nature_status === "ecarte" || visit?.nature_validated === "installation") continue;
+    const day = calendarDay(visit.scheduled_start || visit.scheduledStart);
+    if (!dayInPeriod(day, from, to)) continue;
+    const clientId = visit.client_id || visit.clientId;
+    if (clientId) visitedClients.add(String(clientId));
+  }
+  const picked = [];
+  const seen = new Set();
+  for (const row of contracts || []) {
+    const id = String(row?.id || "");
+    if (id && seen.has(id)) continue;
+    const start = calendarDay(row?.start_on || row?.startOn);
+    const due = calendarDay(row?.next_due_on || row?.next || row?.nextDue);
+    const placed = dayInPeriod(start, from, to);
+    const scheduled = dayInPeriod(due, from, to);
+    const onTour = visitedClients.has(String(row?.client_id || row?.clientId || ""));
+    if (dated && !placed && !onTour && !scheduled) continue;
+    if (moneyAmount(row?.amount) == null) continue;
+    if (id) seen.add(id);
+    picked.push(row);
+  }
+  return picked;
+}
+
+export function sumContractAmounts(contracts = []) {
+  return (contracts || []).reduce((sum, row) => sum + (moneyAmount(row?.amount) || 0), 0);
+}
+
+export function addContractCaToRanking(ranking = [], contracts = [], ownerByClient = new Map()) {
+  const byOwner = new Map();
+  for (const row of contracts || []) {
+    const owner = String(ownerByClient.get(String(row.client_id || row.clientId || "")) || "");
+    byOwner.set(owner, (byOwner.get(owner) || 0) + (moneyAmount(row.amount) || 0));
+  }
+  return (ranking || []).map(row => {
+    const ht = byOwner.get(String(row.id || "")) || 0;
+    return {
+      ...row,
+      caSigne: ht,
+      caSigneTtc: maintenanceTtc(ht),
+    };
+  }).sort((left, right) => {
+    if (right.caSigne !== left.caSigne) return right.caSigne - left.caSigne;
+    return String(left.name).localeCompare(String(right.name), "fr");
+  });
+}
+
 export function filterByActivity(rows, activity, fieldCandidates = ["projectType", "project_type", "label", "kind"]) {
   if (!activity) return rows;
   const needle = String(activity).toLowerCase();
   return (rows || []).filter(row =>
     fieldCandidates.some(field => String(row[field] || "").toLowerCase().includes(needle))
   );
+}
+
+export function rowOwnerId(row, knownIds) {
+  const commercial = String(row?.commercialId || row?.commercial_id || "").trim();
+  const created = String(row?.createdBy || row?.created_by || "").trim();
+  if (knownIds) {
+    if (commercial && knownIds.has(commercial)) return commercial;
+    if (created && knownIds.has(created)) return created;
+  }
+  return commercial || created || "";
+}
+
+export function belongsToCommercial(row, commercialId) {
+  if (!commercialId) return true;
+  const target = String(commercialId);
+  return (
+    String(row?.commercialId || row?.commercial_id || "") === target
+    || String(row?.createdBy || row?.created_by || "") === target
+  );
+}
+
+function salesForCommercial(sales, userId, knownIds) {
+  return (sales || []).filter(sale => {
+    const owner = String(sale?.commercialId || sale?.commercial_id || "");
+    if (!userId) return !knownIds.has(owner);
+    return owner === String(userId);
+  });
+}
+
+export function computeCommercialRanking({
+  commercials = [],
+  devis = [],
+  clients = [],
+  prospects = [],
+  appointments = [],
+  sales = [],
+  now = Date.now(),
+} = {}) {
+  const people = (commercials || [])
+    .filter(user => !user.role || isDevisOwnerRole(user.role))
+    .map(user => ({
+      id: String(user.id || ""),
+      name: user.name || user.full_name || user.email || "Commercial",
+      role: user.role || "",
+    })).filter(user => user.id);
+  const knownIds = new Set(people.map(user => user.id));
+  const buckets = new Map(people.map(user => [user.id, { devis: [], clients: [], prospects: [], appointments: [] }]));
+  const unassigned = { devis: [], clients: [], prospects: [], appointments: [] };
+
+  function push(kind, row) {
+    const id = rowOwnerId(row, knownIds);
+    const bucket = buckets.get(id);
+    (bucket || unassigned)[kind].push(row);
+  }
+
+  (devis || []).forEach(row => push("devis", row));
+  (clients || []).forEach(row => push("clients", row));
+  (prospects || []).forEach(row => push("prospects", row));
+  (appointments || []).forEach(row => push("appointments", row));
+
+  function toRow(user, bucket) {
+    const metrics = computeCommercialDashboard({
+      ...bucket,
+      sales: salesForCommercial(sales, user.id, knownIds),
+      now,
+    });
+    return {
+      id: user.id,
+      name: user.name,
+      role: user.role,
+      prospectsCount: metrics.prospectsCount,
+      upcomingAppointmentsCount: metrics.upcomingAppointmentsCount,
+      devisEnCoursCount: metrics.devisEnCoursCount,
+      devisARelancerCount: metrics.devisARelancerCount,
+      devisAcceptesCount: metrics.devisAcceptesCount,
+      caSigne: metrics.caSigne,
+      caSigneHistorique: metrics.caSigneHistorique,
+      caSigneBrutVerifie: metrics.caSigneBrutVerifie,
+      caSigneNetVerifie: metrics.caSigneNetVerifie,
+      tauxTransformation: metrics.tauxTransformation,
+      pipelineValue: metrics.pipelineValue,
+    };
+  }
+
+  const rows = people.map(user => toRow(user, buckets.get(user.id)));
+  const hasUnassignedSales = salesForCommercial(sales, "", knownIds).length > 0;
+  if (hasUnassignedSales || Object.values(unassigned).some(list => list.length)) {
+    rows.push(toRow({ id: "", name: "Non affecté", role: "" }, unassigned));
+  }
+
+  return rows.sort((left, right) => {
+    if ((right.caSigneNetVerifie || 0) !== (left.caSigneNetVerifie || 0)) {
+      return (right.caSigneNetVerifie || 0) - (left.caSigneNetVerifie || 0);
+    }
+    if (right.caSigne !== left.caSigne) return right.caSigne - left.caSigne;
+    if (right.tauxTransformation !== left.tauxTransformation) return right.tauxTransformation - left.tauxTransformation;
+    if (right.devisAcceptesCount !== left.devisAcceptesCount) return right.devisAcceptesCount - left.devisAcceptesCount;
+    return String(left.name).localeCompare(String(right.name), "fr");
+  });
 }

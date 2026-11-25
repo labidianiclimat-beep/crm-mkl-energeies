@@ -14,6 +14,8 @@ import {
   patchActivationPin,
   serviceRoleConfigured,
 } from "../../../lib/supabase-server";
+import { ACTIVITY_ACTIONS } from "../../../lib/activity-logs";
+import { logActivity } from "../../../lib/log-activity";
 
 export const runtime = "nodejs";
 
@@ -24,7 +26,7 @@ export async function POST(request) {
   try {
     if (!serviceRoleConfigured()) {
       return Response.json({
-        error: "Configuration serveur incomplète. Vérifiez SUPABASE_SERVICE_ROLE_KEY sur Vercel.",
+        error: "Configuration serveur incomplète. Ajoutez SUPABASE_SERVICE_ROLE_KEY dans .env.local (local) ou dans Vercel (en ligne), puis redémarrez le serveur.",
       }, { status: 503 });
     }
 
@@ -79,11 +81,23 @@ export async function POST(request) {
       return Response.json({ error: "Profil utilisateur introuvable." }, { status: 502 });
     }
 
-    if (!profile.active || !profile.onboarding_completed_at) {
+    if (!profile.onboarding_completed_at) {
       await completeProfileActivation(user.id);
+    } else if (!profile.active) {
+      return Response.json({ error: UNKNOWN_CREDENTIALS }, { status: 401 });
     }
 
     const session = await createSessionForEmail(normalizedEmail);
+    await logActivity({
+      organizationId: profile.organization_id,
+      userId: user.id,
+      userName: profile.full_name || normalizedEmail,
+      action: ACTIVITY_ACTIONS.SESSION_LOGIN,
+      module: "Connexion",
+      entityType: "session",
+      entityId: user.id,
+      entityLabel: profile.full_name || normalizedEmail,
+    });
 
     return Response.json({
       ok: true,
